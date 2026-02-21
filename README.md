@@ -1,6 +1,6 @@
 # pai-tools
 
-Reusable CLI tooling for [PAI](https://github.com/danielmiessler/Personal_AI_Infrastructure)-powered development workflows. Run across any project — per-project config lives in `.pai/`.
+Reusable CLI tooling for [PAI](https://github.com/danielmiessler/Personal_AI_Infrastructure)-powered development workflows. Run across any project — per-project config lives in `.pait/`.
 
 ## Install
 
@@ -35,9 +35,9 @@ pait orchestrate --skip-split       # Skip issue splitting assessment
 
 ## Project Config
 
-Each target project stores its config in a `.pai/` directory at the repo root.
+Each target project stores its config in a `.pait/` directory at the repo root.
 
-### `.pai/orchestrator.json`
+### `.pait/orchestrator.json`
 
 ```json
 {
@@ -70,7 +70,7 @@ All fields are optional. Defaults:
 
 ### State
 
-Orchestrator state is stored at `.pai/state/orchestrator.json`. Add `.pai/state/` to your project's `.pai/.gitignore`.
+Orchestrator state is stored at `.pait/state/orchestrator.json`. Add `.pait/state/` to your project's `.pait/.gitignore`.
 
 On first run, if a legacy `scripts/.orchestrator-state.json` exists, it is auto-migrated to the new location.
 

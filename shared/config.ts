@@ -1,5 +1,5 @@
 /**
- * .pai/ directory discovery, config loading, and state path resolution.
+ * .pait/ directory discovery, config loading, and state path resolution.
  */
 
 import { existsSync, readFileSync, mkdirSync, copyFileSync } from 'node:fs';
@@ -21,7 +21,7 @@ export function findRepoRoot(startDir: string = process.cwd()): string {
 }
 
 /**
- * Load a tool's config from `.pai/{toolName}.json` in the repo root.
+ * Load a tool's config from `.pait/{toolName}.json` in the repo root.
  * Returns a shallow merge of `defaults` with the on-disk config.
  */
 export function loadToolConfig<T>(
@@ -29,7 +29,7 @@ export function loadToolConfig<T>(
 	toolName: string,
 	defaults: T
 ): T {
-	const configPath = join(repoRoot, '.pai', `${toolName}.json`);
+	const configPath = join(repoRoot, '.pait', `${toolName}.json`);
 	if (!existsSync(configPath)) return { ...defaults };
 
 	const raw = readFileSync(configPath, 'utf-8');
@@ -38,11 +38,11 @@ export function loadToolConfig<T>(
 }
 
 /**
- * Get the path to a tool's state file at `.pai/state/{toolName}.json`.
- * Creates the `.pai/state/` directory if it doesn't exist.
+ * Get the path to a tool's state file at `.pait/state/{toolName}.json`.
+ * Creates the `.pait/state/` directory if it doesn't exist.
  */
 export function getStateFilePath(repoRoot: string, toolName: string): string {
-	const stateDir = join(repoRoot, '.pai', 'state');
+	const stateDir = join(repoRoot, '.pait', 'state');
 	if (!existsSync(stateDir)) {
 		mkdirSync(stateDir, { recursive: true });
 	}
@@ -50,7 +50,7 @@ export function getStateFilePath(repoRoot: string, toolName: string): string {
 }
 
 /**
- * Migrate legacy state file to the new `.pai/state/` location.
+ * Migrate legacy state file to the new `.pait/state/` location.
  * Only copies if the legacy file exists and the new one does not.
  */
 export function migrateStateIfNeeded(

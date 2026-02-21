@@ -1,6 +1,6 @@
 # pai-tools
 
-Reusable CLI tooling for PAI-powered development workflows. Run across any project — per-project config lives in `.pai/`.
+Reusable CLI tooling for [PAI](https://github.com/danielmiessler/Personal_AI_Infrastructure)-powered development workflows. Run across any project — per-project config lives in `.pai/`.
 
 ## Install
 

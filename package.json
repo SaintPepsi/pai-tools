@@ -1,0 +1,11 @@
+{
+  "name": "pai-tools",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "pait": "./cli.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}

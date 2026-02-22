@@ -8,6 +8,7 @@ import type { OrchestratorConfig } from './types.ts';
 export const ORCHESTRATOR_DEFAULTS: OrchestratorConfig = {
 	branchPrefix: 'feat/',
 	baseBranch: 'master',
+	worktreeDir: '.pait/worktrees',
 	models: {
 		implement: 'sonnet',
 		assess: 'haiku'

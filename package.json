@@ -9,6 +9,7 @@
     "setup": "bun ./cli.ts setup"
   },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "typescript": "^5.9.3"
   }
 }

@@ -7,10 +7,11 @@
  */
 
 import { $ } from 'bun';
-import { readFileSync, writeFileSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
+import { readFileSync, writeFileSync, unlinkSync, existsSync, rmSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { log, Spinner } from '../../shared/log.ts';
 import { runClaude } from '../../shared/claude.ts';
+import { RunLogger } from '../../shared/logging.ts';
 import { findRepoRoot, loadToolConfig, getStateFilePath, migrateStateIfNeeded } from '../../shared/config.ts';
 import { ORCHESTRATOR_DEFAULTS } from './defaults.ts';
 import type {
@@ -295,54 +296,105 @@ async function createSubIssues(
 }
 
 // ---------------------------------------------------------------------------
-// Branch management
+// Worktree + branch management
 // ---------------------------------------------------------------------------
 
-async function branchExists(name: string, repoRoot: string): Promise<boolean> {
+export async function localBranchExists(name: string, repoRoot: string): Promise<boolean> {
 	try {
-		await $`git -C ${repoRoot} rev-parse --verify ${name}`.quiet();
+		await $`git -C ${repoRoot} rev-parse --verify refs/heads/${name}`.quiet();
 		return true;
 	} catch {
 		return false;
 	}
 }
 
-async function createBranchFromDeps(
+export async function deleteLocalBranch(name: string, repoRoot: string): Promise<void> {
+	if (await localBranchExists(name, repoRoot)) {
+		await $`git -C ${repoRoot} branch -D ${name}`.quiet().catch(() => {});
+	}
+}
+
+export async function createWorktree(
 	branchName: string,
 	depBranches: string[],
 	config: OrchestratorConfig,
-	repoRoot: string
-): Promise<{ ok: boolean; error?: string }> {
+	repoRoot: string,
+	logger: RunLogger,
+	issueNumber: number
+): Promise<{ ok: boolean; worktreePath: string; baseBranch: string; error?: string }> {
+	const worktreeDir = resolve(repoRoot, config.worktreeDir);
+	const slug = branchName.replace(/\//g, '-');
+	const worktreePath = join(worktreeDir, slug);
+
+	// Clean up any leftover worktree from a previous run
+	try {
+		await $`git -C ${repoRoot} worktree remove --force ${worktreePath}`.quiet();
+	} catch {
+		// Not an existing worktree — that's fine
+	}
+	if (existsSync(worktreePath)) {
+		rmSync(worktreePath, { recursive: true, force: true });
+	}
+
+	// Delete stale local branch if it exists
+	await deleteLocalBranch(branchName, repoRoot);
+
+	// Determine base branch from dependencies
 	const existingDeps: string[] = [];
 	for (const dep of depBranches) {
-		if (await branchExists(dep, repoRoot)) {
+		if (await localBranchExists(dep, repoRoot)) {
 			existingDeps.push(dep);
 		}
 	}
-
 	const baseBranch = existingDeps.length > 0 ? existingDeps[0] : config.baseBranch;
 
 	try {
-		await $`git -C ${repoRoot} checkout -b ${branchName} ${baseBranch}`.quiet();
+		// Create worktree with a new branch based on the chosen base
+		await $`git -C ${repoRoot} worktree add -b ${branchName} ${worktreePath} ${baseBranch}`.quiet();
 
+		logger.worktreeCreated(issueNumber, worktreePath, branchName);
+		logger.branchCreated(issueNumber, branchName, baseBranch);
+
+		// Merge additional dependency branches inside the worktree
 		for (let i = 1; i < existingDeps.length; i++) {
 			try {
-				await $`git -C ${repoRoot} merge ${existingDeps[i]} --no-edit -m ${'Merge dependency branch ' + existingDeps[i]}`.quiet();
+				await $`git -C ${worktreePath} merge ${existingDeps[i]} --no-edit -m ${'Merge dependency branch ' + existingDeps[i]}`.quiet();
 			} catch {
-				await $`git -C ${repoRoot} merge --abort`.quiet().catch(() => {});
-				await $`git -C ${repoRoot} checkout ${config.baseBranch}`.quiet().catch(() => {});
-				await $`git -C ${repoRoot} branch -D ${branchName}`.quiet().catch(() => {});
+				await $`git -C ${worktreePath} merge --abort`.quiet().catch(() => {});
+				await removeWorktree(worktreePath, branchName, repoRoot, logger, issueNumber);
 				return {
 					ok: false,
+					worktreePath,
+					baseBranch,
 					error: `Merge conflict merging ${existingDeps[i]} into ${branchName} (based on ${baseBranch})`
 				};
 			}
 		}
 
-		return { ok: true };
+		return { ok: true, worktreePath, baseBranch };
 	} catch (err) {
-		return { ok: false, error: `Failed to create branch ${branchName}: ${err}` };
+		return { ok: false, worktreePath, baseBranch, error: `Failed to create worktree for ${branchName}: ${err}` };
 	}
+}
+
+export async function removeWorktree(
+	worktreePath: string,
+	branchName: string,
+	repoRoot: string,
+	logger: RunLogger,
+	issueNumber: number
+): Promise<void> {
+	try {
+		await $`git -C ${repoRoot} worktree remove --force ${worktreePath}`.quiet();
+	} catch {
+		// Force-remove the directory if git worktree remove fails
+		if (existsSync(worktreePath)) {
+			rmSync(worktreePath, { recursive: true, force: true });
+		}
+		// Prune stale worktree entries
+		await $`git -C ${repoRoot} worktree prune`.quiet().catch(() => {});
+	}
+	logger.worktreeRemoved(issueNumber, worktreePath);
 }
 
 // ---------------------------------------------------------------------------
@@ -391,9 +443,10 @@ async function implementIssue(
 	branchName: string,
 	baseBranch: string,
 	config: OrchestratorConfig,
-	repoRoot: string
+	worktreePath: string,
+	logger: RunLogger
 ): Promise<{ ok: boolean; error?: string }> {
-	const prompt = buildImplementationPrompt(issue, branchName, baseBranch, config, repoRoot);
+	const prompt = buildImplementationPrompt(issue, branchName, baseBranch, config, worktreePath);
 
 	const spinner = new Spinner();
 	spinner.start(`Agent implementing #${issue.number}`);
@@ -401,13 +454,16 @@ async function implementIssue(
 	const result = await runClaude({
 		prompt,
 		model: config.models.implement,
-		cwd: repoRoot,
+		cwd: worktreePath,
 		permissionMode: 'acceptEdits',
 		allowedTools: config.allowedTools
 	});
 
 	spinner.stop();
 	log.dim(result.output.slice(-500));
+
+	// Log full agent output
+	logger.agentOutput(issue.number, result.output);
 
 	if (!result.ok) {
 		return { ok: false, error: 'Claude agent failed (exit non-zero)' };
@@ -422,16 +478,19 @@ async function implementIssue(
 async function runVerification(
 	config: OrchestratorConfig,
 	flags: OrchestratorFlags,
-	repoRoot: string,
-	currentIssueNumber: number
+	worktreePath: string,
+	currentIssueNumber: number,
+	logger: RunLogger
 ): Promise<{ ok: boolean; failedStep?: string; error?: string }> {
 	for (const step of config.verify) {
 		log.info(`Running ${step.name}: ${step.cmd}`);
 		try {
-			await $`${{ raw: step.cmd }}`.cwd(repoRoot).quiet();
+			await $`${{ raw: step.cmd }}`.cwd(worktreePath).quiet();
 			log.ok(`${step.name} passed`);
+			logger.verifyPass(currentIssueNumber, step.name);
 		} catch (err) {
 			const output = err instanceof Error ? err.message : String(err);
+			logger.verifyFail(currentIssueNumber, step.name, output.slice(-2000));
 			return { ok: false, failedStep: step.name, error: output.slice(-2000) };
 		}
 	}
@@ -440,22 +499,25 @@ async function runVerification(
 	if (config.e2e && !flags.skipE2e) {
 		log.info(`Running E2E: ${config.e2e.run}`);
 		try {
-			await $`${{ raw: config.e2e.run }}`.cwd(repoRoot).quiet();
+			await $`${{ raw: config.e2e.run }}`.cwd(worktreePath).quiet();
 			log.ok('E2E passed');
+			logger.verifyPass(currentIssueNumber, 'e2e');
 		} catch {
 			log.warn('E2E failed — attempting snapshot update...');
 			try {
-				await $`${{ raw: config.e2e.update }}`.cwd(repoRoot).quiet();
-				await $`${{ raw: config.e2e.run }}`.cwd(repoRoot).quiet();
+				await $`${{ raw: config.e2e.update }}`.cwd(worktreePath).quiet();
+				await $`${{ raw: config.e2e.run }}`.cwd(worktreePath).quiet();
 				log.ok('E2E passed after snapshot update');
+				logger.verifyPass(currentIssueNumber, 'e2e (after snapshot update)');
 				// Stage updated snapshots
 				const glob = config.e2e.snapshotGlob;
-				await $`git -C ${repoRoot} add -A ${glob}`.quiet().catch(() => {});
-				await $`git -C ${repoRoot} commit -m ${'test: update E2E snapshots for #' + currentIssueNumber}`
+				await $`git -C ${worktreePath} add -A ${glob}`.quiet().catch(() => {});
+				await $`git -C ${worktreePath} commit -m ${'test: update E2E snapshots for #' + currentIssueNumber}`
 					.quiet()
 					.catch(() => {});
 			} catch (err) {
 				const output = err instanceof Error ? err.message : String(err);
+				logger.verifyFail(currentIssueNumber, 'e2e', output.slice(-2000));
 				return { ok: false, failedStep: 'e2e', error: output.slice(-2000) };
 			}
 		}
@@ -474,10 +536,11 @@ async function createPR(
 	baseBranch: string,
 	config: OrchestratorConfig,
 	flags: OrchestratorFlags,
-	repoRoot: string
+	worktreePath: string,
+	logger: RunLogger
 ): Promise<{ ok: boolean; prNumber?: number; error?: string }> {
 	try {
-		await $`git -C ${repoRoot} push -u origin ${branchName}`.quiet();
+		await $`git -C ${worktreePath} push -u origin ${branchName}`.quiet();
 	} catch (err) {
 		return { ok: false, error: `Failed to push branch: ${err}` };
 	}
@@ -511,6 +574,7 @@ Automated by pai orchestrate`;
 		const match = result.match(/(\d+)/);
 		const prNumber = match ? Number(match[1]) : undefined;
 		log.ok(`PR created: ${result.trim()}`);
+		if (prNumber) logger.prCreated(issue.number, prNumber);
 		return { ok: true, prNumber };
 	} catch (err) {
 		return { ok: false, error: `Failed to create PR: ${err}` };
@@ -678,7 +742,8 @@ async function runMainLoop(
 	config: OrchestratorConfig,
 	flags: OrchestratorFlags,
 	stateFile: string,
-	repoRoot: string
+	repoRoot: string,
+	logger: RunLogger
 ): Promise<void> {
 	let startIdx = 0;
 	if (flags.singleIssue !== null) {
@@ -725,6 +790,7 @@ async function runMainLoop(
 			continue;
 		}
 
+		const issueStartTime = Date.now();
 		log.step(`ISSUE #${issueNum}: ${node.issue.title} (${i + 1}/${executionOrder.length})`);
 
 		// Check dependencies
@@ -740,6 +806,7 @@ async function runMainLoop(
 			issueState.status = 'failed';
 			issueState.error = `Unmet dependencies: ${unmetDeps.join(', ')}`;
 			saveState(state, stateFile);
+			logger.issueFailed(issueNum, issueState.error);
 			process.exit(1);
 		}
 
@@ -763,6 +830,7 @@ async function runMainLoop(
 				issueState.status = 'split';
 				issueState.subIssues = subIssueNumbers;
 				saveState(state, stateFile);
+				logger.issueSplit(issueNum, subIssueNumbers);
 
 				log.ok(`Split into: ${subIssueNumbers.map((n) => `#${n}`).join(', ')}`);
 				log.info('Re-fetching issues and rebuilding graph...');
@@ -786,8 +854,8 @@ async function runMainLoop(
 			}
 		}
 
-		// Create branch
-		log.info('Creating branch...');
+		// Create worktree with fresh branch
+		log.info('Creating worktree...');
 		const depBranches = node.dependsOn
 			.map((dep) => {
 				const depNode = graph.get(dep);
@@ -798,37 +866,33 @@ async function runMainLoop(
 			})
 			.filter((b): b is string => b !== null);
 
-		const baseBranch = depBranches.length > 0 ? depBranches[0] : config.baseBranch;
-
-		if (await branchExists(node.branch, repoRoot)) {
-			log.info(`Branch ${node.branch} already exists, checking it out`);
-			await $`git -C ${repoRoot} checkout ${node.branch}`.quiet();
-		} else {
-			const branchResult = await createBranchFromDeps(node.branch, depBranches, config, repoRoot);
-			if (!branchResult.ok) {
-				log.error(branchResult.error ?? 'Unknown branch creation error');
-				issueState.status = 'failed';
-				issueState.error = branchResult.error ?? 'Branch creation failed';
-				saveState(state, stateFile);
-				process.exit(1);
-			}
+		const wtResult = await createWorktree(node.branch, depBranches, config, repoRoot, logger, issueNum);
+		if (!wtResult.ok) {
+			log.error(wtResult.error ?? 'Unknown worktree creation error');
+			issueState.status = 'failed';
+			issueState.error = wtResult.error ?? 'Worktree creation failed';
+			saveState(state, stateFile);
+			logger.issueFailed(issueNum, issueState.error);
+			process.exit(1);
 		}
 
+		const { worktreePath, baseBranch } = wtResult;
 		issueState.branch = node.branch;
 		issueState.baseBranch = baseBranch;
 		issueState.status = 'in_progress';
 		saveState(state, stateFile);
+		logger.issueStart(issueNum, node.issue.title, node.branch, baseBranch);
 
-		log.ok(`On branch ${node.branch} (base: ${baseBranch})`);
+		log.ok(`Worktree at ${worktreePath} on branch ${node.branch} (base: ${baseBranch})`);
 
-		// Implement
+		// Implement (inside worktree)
 		let implementOk = false;
 		for (let attempt = 0; attempt <= config.retries.implement; attempt++) {
 			if (attempt > 0) {
 				log.warn(`Implementation retry ${attempt}/${config.retries.implement}`);
 			}
 
-			const implResult = await implementIssue(node.issue, node.branch, baseBranch, config, repoRoot);
+			const implResult = await implementIssue(node.issue, node.branch, baseBranch, config, worktreePath, logger);
 			if (implResult.ok) {
 				implementOk = true;
 				break;
@@ -840,14 +904,19 @@ async function runMainLoop(
 				issueState.status = 'failed';
 				issueState.error = `Implementation failed after ${config.retries.implement + 1} attempts: ${implResult.error}`;
 				saveState(state, stateFile);
+				logger.issueFailed(issueNum, issueState.error);
+				await removeWorktree(worktreePath, node.branch, repoRoot, logger, issueNum);
 				log.error('HALTING — implementation failed');
 				process.exit(1);
 			}
 		}
 
-		if (!implementOk) continue;
+		if (!implementOk) {
+			await removeWorktree(worktreePath, node.branch, repoRoot, logger, issueNum);
+			continue;
+		}
 
-		// Verify
+		// Verify (inside worktree)
 		log.info('Running verification pipeline...');
 		let verifyOk = false;
 		for (let attempt = 0; attempt <= config.retries.verify; attempt++) {
@@ -857,7 +926,7 @@ async function runMainLoop(
 				);
 			}
 
-			const verifyResult = await runVerification(config, flags, repoRoot, issueNum);
+			const verifyResult = await runVerification(config, flags, worktreePath, issueNum, logger);
 			if (verifyResult.ok) {
 				verifyOk = true;
 				break;
@@ -881,45 +950,58 @@ Commit your fixes referencing #${issueNum}.`;
 					const fixSpinner = new Spinner();
 					fixSpinner.start(`Agent fixing verification for #${issueNum}`);
 
-					await runClaude({
+					const fixResult = await runClaude({
 						prompt: fixPrompt,
 						model: config.models.implement,
-						cwd: repoRoot,
+						cwd: worktreePath,
 						permissionMode: 'acceptEdits',
 						allowedTools: config.allowedTools
 					}).catch(() => ({ ok: false, output: '' }));
 
 					fixSpinner.stop();
+					logger.agentOutput(issueNum, fixResult.output);
 				} else {
 					issueState.status = 'failed';
 					issueState.error = `Verification failed at ${verifyResult.failedStep} after ${config.retries.verify + 1} attempts: ${verifyResult.error}`;
 					saveState(state, stateFile);
+					logger.issueFailed(issueNum, issueState.error);
+					await removeWorktree(worktreePath, node.branch, repoRoot, logger, issueNum);
 					log.error('HALTING — verification failed');
 					process.exit(1);
 				}
 			}
 		}
 
-		if (!verifyOk) continue;
+		if (!verifyOk) {
+			await removeWorktree(worktreePath, node.branch, repoRoot, logger, issueNum);
+			continue;
+		}
 
 		log.ok('All verification gates passed');
 
-		// Create PR
+		// Create PR (push from worktree)
 		log.info('Creating pull request...');
-		const prResult = await createPR(node.issue, node.branch, baseBranch, config, flags, repoRoot);
+		const prResult = await createPR(node.issue, node.branch, baseBranch, config, flags, worktreePath, logger);
 		if (!prResult.ok) {
 			log.error(prResult.error ?? 'PR creation failed');
 			issueState.status = 'failed';
 			issueState.error = prResult.error ?? 'PR creation failed';
 			saveState(state, stateFile);
+			logger.issueFailed(issueNum, issueState.error);
+			await removeWorktree(worktreePath, node.branch, repoRoot, logger, issueNum);
 			process.exit(1);
 		}
 
+		// Clean up worktree (branch stays for the PR)
+		await removeWorktree(worktreePath, node.branch, repoRoot, logger, issueNum);
+
 		// Mark complete
+		const durationMs = Date.now() - issueStartTime;
 		issueState.status = 'completed';
 		issueState.prNumber = prResult.prNumber ?? null;
 		issueState.completedAt = new Date().toISOString();
 		saveState(state, stateFile);
+		logger.issueComplete(issueNum, prResult.prNumber, durationMs);
 
 		log.ok(`Issue #${issueNum} completed → PR #${prResult.prNumber}`);
 
@@ -927,12 +1009,14 @@ Commit your fixes referencing #${issueNum}.`;
 			log.step('SINGLE ISSUE COMPLETE');
 			log.info(`Finished #${issueNum}. Run again to process the next issue.`);
 			printStatus(state);
-			return;
+			break;
 		}
 	}
 
-	log.step('ALL ISSUES COMPLETED');
-	printStatus(state);
+	if (!flags.singleMode) {
+		log.step('ALL ISSUES COMPLETED');
+		printStatus(state);
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -985,12 +1069,25 @@ export async function orchestrate(flags: OrchestratorFlags): Promise<void> {
 
 	printExecutionPlan(executionOrder, graph);
 
+	// Initialize run logger
+	const logger = new RunLogger(repoRoot);
+	log.info(`Run log: ${logger.path}`);
+
 	if (flags.dryRun) {
 		const state = loadState(stateFile) ?? initState();
+		logger.runStart({ mode: 'dry-run', issueCount: executionOrder.length });
 		await runDryRun(executionOrder, graph, state, config, flags, repoRoot);
+		logger.runComplete({ mode: 'dry-run' });
 		return;
 	}
 
 	const state = loadState(stateFile) ?? initState();
-	await runMainLoop(executionOrder, graph, state, config, flags, stateFile, repoRoot);
+	logger.runStart({
+		mode: flags.singleMode ? 'single' : 'full',
+		issueCount: executionOrder.length,
+		singleIssue: flags.singleIssue,
+		fromIssue: flags.fromIssue
+	});
+	await runMainLoop(executionOrder, graph, state, config, flags, stateFile, repoRoot, logger);
+	logger.runComplete({ issueCount: executionOrder.length });
 }

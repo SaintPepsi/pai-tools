@@ -51,6 +51,7 @@ export interface E2EConfig {
 export interface OrchestratorConfig {
 	branchPrefix: string;
 	baseBranch: string;
+	worktreeDir: string;
 	models: {
 		implement: string;
 		assess: string;

@@ -9,7 +9,7 @@
 import { $ } from 'bun';
 import { readFileSync, writeFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { log } from '../../shared/log.ts';
+import { log, Spinner } from '../../shared/log.ts';
 import { runClaude } from '../../shared/claude.ts';
 import { findRepoRoot, loadToolConfig, getStateFilePath, migrateStateIfNeeded } from '../../shared/config.ts';
 import { ORCHESTRATOR_DEFAULTS } from './defaults.ts';
@@ -227,6 +227,9 @@ Respond in EXACTLY this JSON format (no markdown, no code fences):
 If shouldSplit is false, proposedSplits should be an empty array.
 Be conservative — only split if it's genuinely too large. Most issues with clear acceptance criteria can be done in one pass.`;
 
+	const spinner = new Spinner();
+	spinner.start(`Assessing #${issue.number} size`);
+
 	const { output: rawResult } = await runClaude({
 		prompt,
 		model: config.models.assess,
@@ -235,6 +238,8 @@ Be conservative — only split if it's genuinely too large. Most issues with cle
 		ok: false,
 		output: ''
 	}));
+
+	spinner.stop();
 
 	try {
 		const jsonMatch: RegExpMatchArray | null = rawResult.match(/\{[\s\S]*\}/);
@@ -387,7 +392,8 @@ async function implementIssue(
 ): Promise<{ ok: boolean; error?: string }> {
 	const prompt = buildImplementationPrompt(issue, branchName, baseBranch, config, repoRoot);
 
-	log.info(`Launching Claude agent for #${issue.number}...`);
+	const spinner = new Spinner();
+	spinner.start(`Agent implementing #${issue.number}`);
 
 	const result = await runClaude({
 		prompt,
@@ -397,6 +403,7 @@ async function implementIssue(
 		allowedTools: config.allowedTools
 	});
 
+	spinner.stop();
 	log.dim(result.output.slice(-500));
 
 	if (!result.ok) {
@@ -865,6 +872,9 @@ ${verifyList}
 
 Commit your fixes referencing #${issueNum}.`;
 
+					const fixSpinner = new Spinner();
+					fixSpinner.start(`Agent fixing verification for #${issueNum}`);
+
 					await runClaude({
 						prompt: fixPrompt,
 						model: config.models.implement,
@@ -872,6 +882,8 @@ Commit your fixes referencing #${issueNum}.`;
 						permissionMode: 'acceptEdits',
 						allowedTools: config.allowedTools
 					}).catch(() => ({ ok: false, output: '' }));
+
+					fixSpinner.stop();
 				} else {
 					issueState.status = 'failed';
 					issueState.error = `Verification failed at ${verifyResult.failedStep} after ${config.retries.verify + 1} attempts: ${verifyResult.error}`;

@@ -382,7 +382,7 @@ function analyzeTier1(filePath: string, rootPath: string, thresholdOverride: num
 
 	return {
 		file: filePath,
-		relativePath: relative(rootPath, filePath),
+		relativePath: relative(rootPath, filePath) || basename(filePath),
 		language: profile.name,
 		lineCount,
 		exportCount,
@@ -865,7 +865,8 @@ const REFACTOR_HELP = `\x1b[36mpait refactor\x1b[0m — AI-powered file structur
   --format <type>    Output format: terminal (default) | json
   --budget <N>       Max AI analysis calls (default: 50)
   --include <glob>   Only analyze matching files
-  --verbose          Show all files, not just flagged ones
+  --verbose          Show all files including OK ones (default)
+  --quiet, -q        Show only flagged files
   --help, -h         Show this help message
 
 \x1b[1mEXAMPLES\x1b[0m
@@ -908,7 +909,7 @@ export function parseRefactorFlags(args: string[]): RefactorFlags {
 		format: 'terminal',
 		budget: 50,
 		include: null,
-		verbose: false,
+		verbose: true,
 	};
 
 	let i = 0;
@@ -942,6 +943,10 @@ export function parseRefactorFlags(args: string[]): RefactorFlags {
 				break;
 			case '--verbose':
 				flags.verbose = true;
+				break;
+			case '--quiet':
+			case '-q':
+				flags.verbose = false;
 				break;
 			default:
 				if (!arg.startsWith('-')) {

@@ -398,7 +398,29 @@ function analyzeTier1(filePath: string, rootPath: string, thresholdOverride: num
 
 // ─── Tier 2: AI Semantic Analysis ───────────────────────────────────────────
 
-const ANALYSIS_PROMPT = `You are a code structure analyst. Analyze this file for Single Responsibility Principle (SRP) violations, Dependency Inversion Principle (DIP) issues, and opportunities to split into focused modules.
+const ANALYSIS_PROMPT = `You are a code structure analyst specializing in SOLID principles. Analyze this file using these precise definitions:
+
+## Single Responsibility Principle (SRP)
+Robert C. Martin: "A module should have one, and only one, reason to change."
+A "reason to change" means one actor or stakeholder. If two different actors (e.g., the CFO and the CTO) would request changes to the same file for different reasons, that file violates SRP. The test: "If I describe what this file does, do I need the word 'and'?" If yes, it likely has multiple responsibilities.
+
+Look for:
+- Multiple unrelated groups of functions that serve different stakeholders
+- Mixed concerns: business logic alongside I/O, formatting alongside computation, parsing alongside rendering
+- Functions that change for different reasons at different times
+
+## Dependency Inversion Principle (DIP)
+Robert C. Martin: "High-level modules should not depend on low-level modules. Both should depend on abstractions. Abstractions should not depend on details. Details should depend on abstractions."
+The test: Does this file import concrete implementations directly (database drivers, HTTP clients, file system calls, specific API clients) when it could depend on an interface or abstraction instead? High-level policy code should not know about low-level implementation details.
+
+Look for:
+- Direct imports of concrete implementations where an interface/type would allow swapping
+- High-level orchestration code mixed with low-level I/O or infrastructure details
+- Tight coupling to specific libraries that makes testing or replacement difficult
+
+## Additional Principles
+- DRY: Is there duplicated logic that indicates mixed concerns being handled in parallel?
+- YAGNI: Are there unused abstractions or over-engineered patterns that add complexity without value?
 
 Respond in this exact JSON format (no markdown, no code fences, just raw JSON):
 {
@@ -408,17 +430,17 @@ Respond in this exact JSON format (no markdown, no code fences, just raw JSON):
   "suggestions": [
     {"filename": "suggested-file-name.ts", "responsibilities": ["responsibility name"], "rationale": "why this split makes sense"}
   ],
-  "principles": ["SRP: explanation of violation", "DIP: explanation if applicable"],
+  "principles": ["SRP: explanation of specific violation", "DIP: explanation of specific violation"],
   "effort": "low|medium|high",
   "summary": "One paragraph summary of the file's structure problems and recommended refactoring approach"
 }
 
 Rules:
 - Only suggest splits that genuinely improve the codebase
-- Each suggested file should have a clear, single responsibility
-- Consider DIP: are there concrete dependencies that should be abstractions?
-- Consider DRY: is there duplicated logic that indicates mixed concerns?
-- If the file is actually well-structured despite its size, say so
+- Each suggested file should have a clear, single responsibility (one reason to change)
+- For each SRP violation, name the two distinct actors/reasons that would drive changes
+- For each DIP violation, name the concrete dependency and what abstraction would replace it
+- If the file is actually well-structured despite its size, say so — size alone is not a violation
 - "effort" reflects the difficulty of the refactoring, not the file's badness
 - Keep responsibility names short (2-4 words)`;
 
@@ -825,6 +847,55 @@ export async function refactor(flags: RefactorFlags): Promise<void> {
 	}
 }
 
+// ─── Help Text ──────────────────────────────────────────────────────────────
+
+const REFACTOR_HELP = `\x1b[36mpait refactor\x1b[0m — AI-powered file structure analyzer
+
+\x1b[1mUSAGE\x1b[0m
+  pait refactor [path] [flags]
+
+\x1b[1mARGUMENTS\x1b[0m
+  path               Target directory or file (default: .)
+
+\x1b[1mFLAGS\x1b[0m
+  --threshold <N>    Soft line threshold override (default: auto per language)
+  --tier1-only       Skip AI analysis, run heuristics only (free, instant)
+  --issues           Create GitHub issues for flagged files
+  --dry-run          Preview issues without creating them
+  --format <type>    Output format: terminal (default) | json
+  --budget <N>       Max AI analysis calls (default: 50)
+  --include <glob>   Only analyze matching files
+  --verbose          Show all files, not just flagged ones
+  --help, -h         Show this help message
+
+\x1b[1mEXAMPLES\x1b[0m
+  pait refactor ./src                        Full two-tier analysis
+  pait refactor ./src --tier1-only           Heuristics only (free)
+  pait refactor ./src --issues --dry-run     Preview GitHub issues
+  pait refactor ./src --format json          JSON output for CI
+  pait refactor . --threshold 150            Custom line threshold
+  pait refactor ./src --budget 10            Limit AI calls to 10
+
+\x1b[1mANALYSIS TIERS\x1b[0m
+  \x1b[33mTier 1 (Heuristic)\x1b[0m  Free, instant. Line count, function/export/class
+                       density, import fan-in. Flags candidates for Tier 2.
+  \x1b[35mTier 2 (AI)\x1b[0m         Claude Sonnet semantic analysis. Detects SRP and DIP
+                       violations, suggests concrete file splits with rationale.
+
+\x1b[1mPRINCIPLES\x1b[0m
+  SRP   A module should have one, and only one, reason to change (Martin)
+  DIP   High-level modules should not depend on low-level modules;
+        both should depend on abstractions (Martin)
+  DRY   Don't repeat yourself — duplicated logic signals mixed concerns
+  YAGNI You aren't gonna need it — don't over-abstract prematurely
+
+\x1b[1mCONFIG\x1b[0m
+  Per-project overrides in .pait/refactor.json:
+  { "softThreshold": 200, "hardThreshold": 400, "ignore": ["generated/"] }
+
+\x1b[90mhttps://github.com/SaintPepsi/pai-tools\x1b[0m
+`;
+
 // ─── Flag Parser ────────────────────────────────────────────────────────────
 
 export function parseRefactorFlags(args: string[]): RefactorFlags {
@@ -844,6 +915,10 @@ export function parseRefactorFlags(args: string[]): RefactorFlags {
 	while (i < args.length) {
 		const arg = args[i];
 		switch (arg) {
+			case '--help':
+			case '-h':
+				console.log(REFACTOR_HELP);
+				process.exit(0);
 			case '--threshold':
 				flags.threshold = parseInt(args[++i], 10);
 				break;

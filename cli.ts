@@ -18,6 +18,8 @@
 
 import { orchestrate, parseFlags } from './tools/orchestrator/index.ts';
 import { setup } from './tools/setup.ts';
+import { $ } from 'bun';
+import { dirname } from 'node:path';
 
 const HELP = `\x1b[36mpait\x1b[0m — PAI Tools CLI
 
@@ -26,6 +28,7 @@ const HELP = `\x1b[36mpait\x1b[0m — PAI Tools CLI
 
 \x1b[1mCOMMANDS\x1b[0m
   orchestrate    Run the issue orchestrator
+  update         Pull latest pai-tools from remote
   setup          Register pait globally and configure PATH
   help           Show this help message
 
@@ -47,6 +50,13 @@ const commands = new Map<string, CommandHandler>([
 		await orchestrate(flags);
 	}],
 	['setup', setup],
+	['update', async () => {
+		const repoRoot = dirname(import.meta.dir);
+		console.log(`\x1b[36m[INFO]\x1b[0m Updating pai-tools...`);
+		const result = await $`git -C ${repoRoot} pull --ff-only`.text();
+		console.log(result.trim());
+		console.log(`\x1b[32m[OK]\x1b[0m pai-tools is up to date`);
+	}],
 	['help', async () => {
 		console.log(HELP);
 	}]

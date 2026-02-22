@@ -20,6 +20,7 @@ export type IssueStatus = 'pending' | 'in_progress' | 'completed' | 'failed' | '
 
 export interface IssueState {
 	number: number;
+	title: string | null;
 	status: IssueStatus;
 	branch: string | null;
 	baseBranch: string | null;

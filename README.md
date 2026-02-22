@@ -21,6 +21,14 @@ pait <command> [flags]
 
 Automated GitHub issue implementation orchestrator. See [tools/orchestrator/README.md](tools/orchestrator/README.md) for usage, config, and options.
 
+### `pait update`
+
+Pull the latest pai-tools from the remote repository. Since `bun link` symlinks to the repo, this is all you need to stay current.
+
+```bash
+pait update
+```
+
 ## Project Config
 
 Each target project stores its config in a `.pait/` directory at the repo root. See individual tool READMEs for config schema.

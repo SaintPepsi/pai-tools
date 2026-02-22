@@ -90,10 +90,11 @@ function initState(): OrchestratorState {
 	};
 }
 
-function getIssueState(state: OrchestratorState, num: number): IssueState {
+function getIssueState(state: OrchestratorState, num: number, title?: string): IssueState {
 	if (!state.issues[num]) {
 		state.issues[num] = {
 			number: num,
+			title: title ?? null,
 			status: 'pending',
 			branch: null,
 			baseBranch: null,
@@ -102,6 +103,8 @@ function getIssueState(state: OrchestratorState, num: number): IssueState {
 			completedAt: null,
 			subIssues: null
 		};
+	} else if (title && !state.issues[num].title) {
+		state.issues[num].title = title;
 	}
 	return state.issues[num];
 }
@@ -555,9 +558,10 @@ function printStatus(state: OrchestratorState): void {
 					: entry.status === 'split'
 						? '\x1b[33m↔\x1b[0m'
 						: '\x1b[2m○\x1b[0m';
+		const titleStr = entry.title ? ` ${entry.title}` : '';
 		const extra = entry.prNumber ? ` → PR #${entry.prNumber}` : '';
 		const errMsg = entry.error ? `\n      \x1b[31m${entry.error}\x1b[0m` : '';
-		console.log(`  ${icon} #${entry.number} [${entry.status}]${extra}${errMsg}`);
+		console.log(`  ${icon} #${entry.number}${titleStr} [${entry.status}]${extra}${errMsg}`);
 	}
 }
 
@@ -700,8 +704,10 @@ async function runMainLoop(
 	}
 
 	const modeLabel = flags.singleMode ? ' (single issue mode)' : '';
+	const startNode = graph.get(executionOrder[startIdx]);
+	const startTitle = startNode ? `: ${startNode.issue.title}` : '';
 	log.info(
-		`Starting from issue #${executionOrder[startIdx]} (position ${startIdx + 1}/${executionOrder.length})${modeLabel}`
+		`Starting from issue #${executionOrder[startIdx]}${startTitle} (position ${startIdx + 1}/${executionOrder.length})${modeLabel}`
 	);
 
 	for (let i = startIdx; i < executionOrder.length; i++) {
@@ -709,7 +715,7 @@ async function runMainLoop(
 		const node = graph.get(issueNum);
 		if (!node) continue;
 
-		const issueState = getIssueState(state, issueNum);
+		const issueState = getIssueState(state, issueNum, node.issue.title);
 		if (issueState.status === 'completed') {
 			log.dim(`Skipping #${issueNum} (already completed)`);
 			continue;

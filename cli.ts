@@ -19,7 +19,12 @@
 import { orchestrate, parseFlags } from './tools/orchestrator/index.ts';
 import { setup } from './tools/setup.ts';
 import { $ } from 'bun';
-import { dirname } from 'node:path';
+import { join } from 'node:path';
+
+async function getVersion(): Promise<string> {
+	const pkg = await Bun.file(join(import.meta.dir, 'package.json')).json();
+	return pkg.version;
+}
 
 const HELP = `\x1b[36mpait\x1b[0m — PAI Tools CLI
 
@@ -29,6 +34,7 @@ const HELP = `\x1b[36mpait\x1b[0m — PAI Tools CLI
 \x1b[1mCOMMANDS\x1b[0m
   orchestrate    Run the issue orchestrator
   update         Pull latest pai-tools from remote
+  version        Show current version
   setup          Register pait globally and configure PATH
   help           Show this help message
 
@@ -40,6 +46,8 @@ const HELP = `\x1b[36mpait\x1b[0m — PAI Tools CLI
   --reset          Clear state and start fresh
   --skip-e2e       Skip E2E verification step
   --skip-split     Skip issue splitting assessment
+
+\x1b[90mhttps://github.com/SaintPepsi/pai-tools\x1b[0m
 `;
 
 type CommandHandler = () => Promise<void>;
@@ -51,11 +59,21 @@ const commands = new Map<string, CommandHandler>([
 	}],
 	['setup', setup],
 	['update', async () => {
-		const repoRoot = dirname(import.meta.dir);
-		console.log(`\x1b[36m[INFO]\x1b[0m Updating pai-tools...`);
+		const repoRoot = import.meta.dir;
+		const before = await getVersion();
+		console.log(`\x1b[36m[INFO]\x1b[0m Updating pai-tools from v${before}...`);
 		const result = await $`git -C ${repoRoot} pull --ff-only`.text();
 		console.log(result.trim());
-		console.log(`\x1b[32m[OK]\x1b[0m pai-tools is up to date`);
+		const after = await getVersion();
+		if (before === after) {
+			console.log(`\x1b[32m[OK]\x1b[0m pai-tools v${after} is up to date`);
+		} else {
+			console.log(`\x1b[32m[OK]\x1b[0m pai-tools updated: v${before} → v${after}`);
+		}
+	}],
+	['version', async () => {
+		const v = await getVersion();
+		console.log(`pait v${v}`);
 	}],
 	['help', async () => {
 		console.log(HELP);
@@ -67,6 +85,12 @@ async function main(): Promise<void> {
 
 	if (!subcommand || subcommand === 'help' || subcommand === '--help' || subcommand === '-h') {
 		console.log(HELP);
+		return;
+	}
+
+	if (subcommand === '--version' || subcommand === '-V') {
+		const v = await getVersion();
+		console.log(`pait v${v}`);
 		return;
 	}
 

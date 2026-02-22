@@ -17,6 +17,7 @@
  */
 
 import { orchestrate, parseFlags } from './tools/orchestrator/index.ts';
+import { setup } from './tools/setup.ts';
 
 const HELP = `\x1b[36mpait\x1b[0m — PAI Tools CLI
 
@@ -25,6 +26,7 @@ const HELP = `\x1b[36mpait\x1b[0m — PAI Tools CLI
 
 \x1b[1mCOMMANDS\x1b[0m
   orchestrate    Run the issue orchestrator
+  setup          Register pait globally and configure PATH
   help           Show this help message
 
 \x1b[1mORCHESTRATOR FLAGS\x1b[0m
@@ -44,6 +46,7 @@ const commands = new Map<string, CommandHandler>([
 		const flags = parseFlags(process.argv.slice(3));
 		await orchestrate(flags);
 	}],
+	['setup', setup],
 	['help', async () => {
 		console.log(HELP);
 	}]

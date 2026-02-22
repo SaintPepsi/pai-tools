@@ -5,6 +5,9 @@
   "bin": {
     "pait": "./cli.ts"
   },
+  "scripts": {
+    "setup": "bun ./cli.ts setup"
+  },
   "devDependencies": {
     "@types/bun": "latest"
   }

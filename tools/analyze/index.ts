@@ -34,47 +34,23 @@
  * ============================================================================
  */
 
-import { readFileSync, readdirSync, statSync, existsSync, writeFileSync } from 'node:fs';
-import { join, extname, relative, basename } from 'node:path';
-import { createHash } from 'node:crypto';
+import { readFileSync, existsSync } from 'node:fs';
+import { join, relative, basename } from 'node:path';
 import { log, Spinner } from '../../shared/log.ts';
 import { runClaude } from '../../shared/claude.ts';
-import { findRepoRoot, loadToolConfig, getStateFilePath } from '../../shared/config.ts';
+import { findRepoRoot, loadToolConfig } from '../../shared/config.ts';
 import type {
 	RefactorFlags,
-	LanguageProfile,
 	Tier1Result,
 	Tier2Result,
 	AnalysisResult,
-	AnalysisCache,
 	RefactorReport,
 	IssueData,
 } from './types.ts';
-import { LANGUAGE_PROFILES, DEFAULT_PROFILE, SOURCE_EXTENSIONS } from './language-profiles.ts';
+import { computeFileHash, loadCache, saveCache } from './cache.ts';
+import { discoverFiles, getLanguageProfile } from './discovery.ts';
 
 export type { RefactorFlags } from './types.ts';
-
-// ─── Cache & Hash Utilities ──────────────────────────────────────────────────
-
-function computeFileHash(filePath: string): string {
-	const content = readFileSync(filePath);
-	return createHash('sha256').update(content).digest('hex');
-}
-
-function loadCache(repoRoot: string): AnalysisCache {
-	const cachePath = getStateFilePath(repoRoot, 'analyze');
-	if (!existsSync(cachePath)) return { entries: {} };
-	try {
-		return JSON.parse(readFileSync(cachePath, 'utf-8')) as AnalysisCache;
-	} catch {
-		return { entries: {} };
-	}
-}
-
-function saveCache(repoRoot: string, cache: AnalysisCache): void {
-	const cachePath = getStateFilePath(repoRoot, 'analyze');
-	writeFileSync(cachePath, JSON.stringify(cache, null, 2));
-}
 
 // ─── GitHub Label Management ────────────────────────────────────────────────
 
@@ -112,75 +88,6 @@ async function ensureLabels(labels: string[], repoRoot: string): Promise<void> {
 			}
 		}
 	}
-}
-
-// ─── Ignore Patterns ────────────────────────────────────────────────────────
-
-const IGNORE_DIRS = new Set([
-	'node_modules', '.git', 'dist', 'build', 'out', '.next', '.nuxt',
-	'coverage', '.turbo', '.cache', 'vendor', 'target', '__pycache__',
-	'.venv', 'venv', '.tox', 'pkg', 'bin', 'obj', '.svn', '.hg',
-]);
-
-const IGNORE_FILES = new Set([
-	'package-lock.json', 'yarn.lock', 'bun.lock', 'pnpm-lock.yaml',
-	'Cargo.lock', 'go.sum', 'Gemfile.lock', 'composer.lock',
-]);
-
-// ─── File Discovery ─────────────────────────────────────────────────────────
-
-function discoverFiles(rootPath: string, include: string | null): string[] {
-	const files: string[] = [];
-
-	function walk(dir: string): void {
-		let entries: string[];
-		try {
-			entries = readdirSync(dir);
-		} catch {
-			return;
-		}
-
-		for (const entry of entries) {
-			if (entry.startsWith('.') && entry !== '.') continue;
-			if (IGNORE_DIRS.has(entry)) continue;
-
-			const fullPath = join(dir, entry);
-			let stat;
-			try {
-				stat = statSync(fullPath);
-			} catch {
-				continue;
-			}
-
-			if (stat.isDirectory()) {
-				walk(fullPath);
-			} else if (stat.isFile()) {
-				if (IGNORE_FILES.has(entry)) continue;
-				const ext = extname(entry).toLowerCase();
-				if (SOURCE_EXTENSIONS.has(ext)) {
-					files.push(fullPath);
-				}
-			}
-		}
-	}
-
-	// If path is a single file, just return it
-	try {
-		const stat = statSync(rootPath);
-		if (stat.isFile()) {
-			return [rootPath];
-		}
-	} catch {
-		return [];
-	}
-
-	walk(rootPath);
-	return files.sort();
-}
-
-function getLanguageProfile(filePath: string): LanguageProfile {
-	const ext = extname(filePath).toLowerCase();
-	return LANGUAGE_PROFILES.find(p => p.extensions.includes(ext)) ?? DEFAULT_PROFILE;
 }
 
 // ─── Tier 1: Heuristic Analysis ─────────────────────────────────────────────

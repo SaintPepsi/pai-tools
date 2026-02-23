@@ -40,221 +40,19 @@ import { createHash } from 'node:crypto';
 import { log, Spinner } from '../../shared/log.ts';
 import { runClaude } from '../../shared/claude.ts';
 import { findRepoRoot, loadToolConfig, getStateFilePath } from '../../shared/config.ts';
+import type {
+	RefactorFlags,
+	LanguageProfile,
+	Tier1Result,
+	Tier2Result,
+	AnalysisResult,
+	AnalysisCache,
+	RefactorReport,
+	IssueData,
+} from './types.ts';
+import { LANGUAGE_PROFILES, DEFAULT_PROFILE, SOURCE_EXTENSIONS } from './language-profiles.ts';
 
-// ─── Types ──────────────────────────────────────────────────────────────────
-
-export interface RefactorFlags {
-	path: string;
-	threshold: number | null;
-	tier1Only: boolean;
-	issues: boolean;
-	dryRun: boolean;
-	format: 'terminal' | 'json';
-	budget: number;
-	include: string | null;
-	verbose: boolean;
-}
-
-interface LanguageProfile {
-	name: string;
-	extensions: string[];
-	softThreshold: number;
-	hardThreshold: number;
-	exportPattern: RegExp;
-	functionPattern: RegExp;
-	classPattern: RegExp;
-	importPattern: RegExp;
-}
-
-interface Tier1Result {
-	file: string;
-	relativePath: string;
-	language: string;
-	lineCount: number;
-	exportCount: number;
-	functionCount: number;
-	classCount: number;
-	importCount: number;
-	softThreshold: number;
-	hardThreshold: number;
-	severity: 'ok' | 'warn' | 'critical';
-	signals: string[];
-}
-
-interface Responsibility {
-	name: string;
-	description: string;
-	lineRanges: string;
-}
-
-interface SplitSuggestion {
-	filename: string;
-	responsibilities: string[];
-	rationale: string;
-}
-
-interface Tier2Result {
-	file: string;
-	responsibilities: Responsibility[];
-	suggestions: SplitSuggestion[];
-	principles: string[];
-	effort: 'low' | 'medium' | 'high';
-	summary: string;
-}
-
-interface AnalysisResult {
-	file: string;
-	relativePath: string;
-	tier1: Tier1Result;
-	tier2: Tier2Result | null;
-	cached: boolean;
-}
-
-interface CacheEntry {
-	hash: string;
-	timestamp: string;
-	result: Tier2Result;
-}
-
-interface AnalysisCache {
-	entries: Record<string, CacheEntry>;
-}
-
-interface RefactorReport {
-	timestamp: string;
-	targetPath: string;
-	totalFiles: number;
-	analyzedFiles: number;
-	flaggedFiles: number;
-	aiAnalyzed: number;
-	cacheHits: number;
-	results: AnalysisResult[];
-	summary: ReportSummary;
-}
-
-interface ReportSummary {
-	critical: number;
-	warnings: number;
-	ok: number;
-	topOffenders: { file: string; lineCount: number; signals: number }[];
-	estimatedEffort: string;
-}
-
-// ─── Language Profiles ──────────────────────────────────────────────────────
-
-const LANGUAGE_PROFILES: LanguageProfile[] = [
-	{
-		name: 'TypeScript',
-		extensions: ['.ts', '.tsx'],
-		softThreshold: 200,
-		hardThreshold: 400,
-		exportPattern: /^\s*export\s+(default\s+)?(function|class|const|let|var|interface|type|enum|abstract)/gm,
-		functionPattern: /^\s*(export\s+)?(async\s+)?function\s+\w+|^\s*(const|let|var)\s+\w+\s*=\s*(async\s+)?\(|^\s*(public|private|protected|static|async)\s+(async\s+)?\w+\s*\(/gm,
-		classPattern: /^\s*(export\s+)?(default\s+)?(abstract\s+)?class\s+\w+/gm,
-		importPattern: /^\s*import\s+/gm,
-	},
-	{
-		name: 'JavaScript',
-		extensions: ['.js', '.jsx', '.mjs', '.cjs'],
-		softThreshold: 200,
-		hardThreshold: 400,
-		exportPattern: /^\s*(export\s+(default\s+)?|module\.exports)/gm,
-		functionPattern: /^\s*(export\s+)?(async\s+)?function\s+\w+|^\s*(const|let|var)\s+\w+\s*=\s*(async\s+)?\(/gm,
-		classPattern: /^\s*(export\s+)?(default\s+)?class\s+\w+/gm,
-		importPattern: /^\s*(import\s+|const\s+\w+\s*=\s*require\()/gm,
-	},
-	{
-		name: 'Python',
-		extensions: ['.py'],
-		softThreshold: 250,
-		hardThreshold: 500,
-		exportPattern: /^[a-zA-Z_]\w*\s*=/gm,  // Python: top-level assignments as "exports"
-		functionPattern: /^\s*(async\s+)?def\s+\w+/gm,
-		classPattern: /^\s*class\s+\w+/gm,
-		importPattern: /^\s*(import\s+|from\s+\S+\s+import)/gm,
-	},
-	{
-		name: 'Go',
-		extensions: ['.go'],
-		softThreshold: 300,
-		hardThreshold: 600,
-		exportPattern: /^func\s+[A-Z]|^type\s+[A-Z]|^var\s+[A-Z]/gm,
-		functionPattern: /^func\s+/gm,
-		classPattern: /^type\s+\w+\s+struct/gm,
-		importPattern: /^\s*"[^"]+"/gm,
-	},
-	{
-		name: 'Rust',
-		extensions: ['.rs'],
-		softThreshold: 300,
-		hardThreshold: 600,
-		exportPattern: /^\s*pub\s+(fn|struct|enum|trait|type|mod|const|static)/gm,
-		functionPattern: /^\s*(pub\s+)?(async\s+)?fn\s+\w+/gm,
-		classPattern: /^\s*(pub\s+)?(struct|enum|trait)\s+\w+/gm,
-		importPattern: /^\s*use\s+/gm,
-	},
-	{
-		name: 'Java',
-		extensions: ['.java'],
-		softThreshold: 250,
-		hardThreshold: 500,
-		exportPattern: /^\s*public\s+(class|interface|enum|record)/gm,
-		functionPattern: /^\s*(public|private|protected|static|\s)+[\w<>\[\]]+\s+\w+\s*\(/gm,
-		classPattern: /^\s*(public\s+)?(abstract\s+)?(class|interface|enum|record)\s+\w+/gm,
-		importPattern: /^\s*import\s+/gm,
-	},
-	{
-		name: 'C#',
-		extensions: ['.cs'],
-		softThreshold: 250,
-		hardThreshold: 500,
-		exportPattern: /^\s*public\s+(class|interface|enum|struct|record)/gm,
-		functionPattern: /^\s*(public|private|protected|internal|static|async|virtual|override|\s)+[\w<>\[\]]+\s+\w+\s*\(/gm,
-		classPattern: /^\s*(public\s+)?(abstract\s+|static\s+)?(class|interface|enum|struct|record)\s+\w+/gm,
-		importPattern: /^\s*using\s+/gm,
-	},
-	{
-		name: 'Ruby',
-		extensions: ['.rb'],
-		softThreshold: 200,
-		hardThreshold: 400,
-		exportPattern: /^\s*(def\s+self\.|module_function|attr_)/gm,
-		functionPattern: /^\s*def\s+\w+/gm,
-		classPattern: /^\s*(class|module)\s+\w+/gm,
-		importPattern: /^\s*require\s+/gm,
-	},
-	{
-		name: 'PHP',
-		extensions: ['.php'],
-		softThreshold: 200,
-		hardThreshold: 400,
-		exportPattern: /^\s*public\s+(function|static)/gm,
-		functionPattern: /^\s*(public|private|protected|static|\s)*function\s+\w+/gm,
-		classPattern: /^\s*(abstract\s+)?(class|interface|trait|enum)\s+\w+/gm,
-		importPattern: /^\s*(use\s+|require|include)/gm,
-	},
-	{
-		name: 'Swift',
-		extensions: ['.swift'],
-		softThreshold: 250,
-		hardThreshold: 500,
-		exportPattern: /^\s*(public|open)\s+(func|class|struct|enum|protocol)/gm,
-		functionPattern: /^\s*(public\s+|private\s+|internal\s+|open\s+|static\s+|override\s+)*func\s+\w+/gm,
-		classPattern: /^\s*(public\s+|open\s+)?(class|struct|enum|protocol|actor)\s+\w+/gm,
-		importPattern: /^\s*import\s+/gm,
-	},
-];
-
-const DEFAULT_PROFILE: LanguageProfile = {
-	name: 'Unknown',
-	extensions: [],
-	softThreshold: 250,
-	hardThreshold: 500,
-	exportPattern: /^\s*export\s+/gm,
-	functionPattern: /^\s*(function|def|func|fn)\s+\w+/gm,
-	classPattern: /^\s*(class|struct|interface)\s+\w+/gm,
-	importPattern: /^\s*(import|require|use|include)\s+/gm,
-};
+export type { RefactorFlags } from './types.ts';
 
 // ─── Cache & Hash Utilities ──────────────────────────────────────────────────
 
@@ -328,10 +126,6 @@ const IGNORE_FILES = new Set([
 	'package-lock.json', 'yarn.lock', 'bun.lock', 'pnpm-lock.yaml',
 	'Cargo.lock', 'go.sum', 'Gemfile.lock', 'composer.lock',
 ]);
-
-const SOURCE_EXTENSIONS = new Set(
-	LANGUAGE_PROFILES.flatMap(p => p.extensions)
-);
 
 // ─── File Discovery ─────────────────────────────────────────────────────────
 
@@ -560,12 +354,6 @@ async function analyzeTier2(filePath: string, repoRoot: string): Promise<Tier2Re
 }
 
 // ─── GitHub Issue Creation ──────────────────────────────────────────────────
-
-interface IssueData {
-	title: string;
-	body: string;
-	labels: string[];
-}
 
 function buildIssueData(result: AnalysisResult): IssueData | null {
 	if (result.tier1.severity === 'ok' && !result.tier2) return null;

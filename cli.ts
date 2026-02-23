@@ -49,7 +49,9 @@ const HELP = `\x1b[36mpait\x1b[0m — PAI Tools CLI
   --dry-run        Show what issues would be created
   --format <type>  Output: terminal (default) | json
   --budget <N>     Max AI analysis calls (default: 50)
+  --include <glob> Additional glob patterns to include
   --quiet, -q     Show only flagged files (default: show all)
+  --verbose        Show detailed analysis output
 
 \x1b[1mORCHESTRATOR FLAGS\x1b[0m
   --dry-run        Show execution plan without acting

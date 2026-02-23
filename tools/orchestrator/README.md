@@ -14,6 +14,7 @@ pait orchestrate --from 109         # Start from issue #109
 pait orchestrate --reset            # Clear state and start fresh
 pait orchestrate --skip-e2e         # Skip E2E verification step
 pait orchestrate --skip-split       # Skip issue splitting assessment
+pait orchestrate --no-verify        # Skip verification requirement
 ```
 
 ## Config
@@ -31,7 +32,8 @@ Per-project config lives at `.pait/orchestrator.json` in the target repo.
     "update": "bun run test:e2e:update",
     "snapshotGlob": "*.png"
   },
-  "allowedTools": "Bash(bun:*) Bash(git:*) Edit Write Read Glob Grep"
+  "allowedTools": "Bash(bun:*) Bash(git:*) Edit Write Read Glob Grep",
+  "allowedAuthors": ["SanCoca", "trusted-collaborator"]
 }
 ```
 
@@ -46,8 +48,29 @@ All fields are optional. Defaults:
 | `retries.implement` | `1` |
 | `retries.verify` | `1` |
 | `allowedTools` | `Bash Edit Write Read Glob Grep` |
-| `verify` | `[]` (no verification commands) |
+| `verify` | `[]` (prompts on first run) |
 | `e2e` | not set (E2E step skipped) |
+| `allowedAuthors` | authenticated `gh` user only |
+
+## Verification
+
+Verification steps are **required** by default. If no `verify` commands are configured in `.pait/orchestrator.json`, the orchestrator will interactively prompt you to provide them on first run. The commands you enter are saved to `.pait/orchestrator.json` so future runs don't re-prompt.
+
+Use `--no-verify` to bypass this requirement entirely (not recommended for production use).
+
+## Security
+
+The orchestrator only processes issues authored by the authenticated `gh` user. This prevents prompt injection attacks where a malicious actor creates a GitHub issue on a public repo with crafted instructions that would be fed to the implementation agent.
+
+To allow issues from additional trusted collaborators, add `allowedAuthors` to your config:
+
+```json
+{
+  "allowedAuthors": ["your-username", "trusted-collaborator"]
+}
+```
+
+When `allowedAuthors` is not set, the orchestrator resolves the current user via `gh api user` and only fetches their issues.
 
 ## State
 

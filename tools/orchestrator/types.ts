@@ -71,6 +71,7 @@ export interface OrchestratorFlags {
 	statusOnly: boolean;
 	skipE2e: boolean;
 	skipSplit: boolean;
+	noVerify: boolean;
 	singleMode: boolean;
 	singleIssue: number | null;
 	fromIssue: number | null;

@@ -12,7 +12,7 @@ import { join, resolve } from 'node:path';
 import { log, Spinner } from '../../shared/log.ts';
 import { runClaude } from '../../shared/claude.ts';
 import { RunLogger } from '../../shared/logging.ts';
-import { findRepoRoot, loadToolConfig, getStateFilePath, migrateStateIfNeeded } from '../../shared/config.ts';
+import { findRepoRoot, loadToolConfig, saveToolConfig, getStateFilePath, migrateStateIfNeeded } from '../../shared/config.ts';
 import { ORCHESTRATOR_DEFAULTS } from './defaults.ts';
 import type {
 	GitHubIssue,
@@ -20,7 +20,8 @@ import type {
 	IssueState,
 	OrchestratorState,
 	OrchestratorConfig,
-	OrchestratorFlags
+	OrchestratorFlags,
+	VerifyCommand
 } from './types.ts';
 
 // ---------------------------------------------------------------------------
@@ -57,6 +58,7 @@ export function parseFlags(args: string[]): OrchestratorFlags {
 		statusOnly: args.includes('--status'),
 		skipE2e: args.includes('--skip-e2e'),
 		skipSplit: args.includes('--skip-split'),
+		noVerify: args.includes('--no-verify'),
 		singleMode: args.includes('--single'),
 		singleIssue,
 		fromIssue
@@ -1020,6 +1022,42 @@ Commit your fixes referencing #${issueNum}.`;
 }
 
 // ---------------------------------------------------------------------------
+// Interactive verify prompt
+// ---------------------------------------------------------------------------
+
+import { createInterface } from 'node:readline';
+
+function promptLine(question: string): Promise<string> {
+	const rl = createInterface({ input: process.stdin, output: process.stdout });
+	return new Promise((resolve) => {
+		rl.question(question, (answer) => {
+			rl.close();
+			resolve(answer.trim());
+		});
+	});
+}
+
+async function promptForVerifyCommands(): Promise<VerifyCommand[]> {
+	log.warn('No verification commands configured.');
+	log.info('The orchestrator requires verification steps to ensure implementations are correct.');
+	log.info('Common examples: "bun tsc --noEmit" (typecheck), "bun test" (tests), "bun run lint" (lint)\n');
+
+	const commands: VerifyCommand[] = [];
+	let index = 1;
+
+	while (true) {
+		const cmd = await promptLine(`  Verify command ${index} (empty to finish): `);
+		if (!cmd) break;
+
+		const name = await promptLine(`  Name for this step (e.g. "typecheck", "test"): `);
+		commands.push({ name: name || `verify-${index}`, cmd });
+		index++;
+	}
+
+	return commands;
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
@@ -1057,6 +1095,20 @@ export async function orchestrate(flags: OrchestratorFlags): Promise<void> {
 		}
 		printStatus(state);
 		return;
+	}
+
+	// Require verification unless --no-verify
+	if (config.verify.length === 0 && !config.e2e && !flags.noVerify) {
+		const commands = await promptForVerifyCommands();
+		if (commands.length === 0) {
+			log.error('No verification commands provided. Use --no-verify to skip verification.');
+			process.exit(1);
+		}
+		config.verify = commands;
+
+		// Save to project config so future runs don't re-prompt
+		saveToolConfig<OrchestratorConfig>(repoRoot, 'orchestrator', { verify: commands });
+		log.ok(`Saved ${commands.length} verification step(s) to .pait/orchestrator.json`);
 	}
 
 	// Fetch issues and build graph

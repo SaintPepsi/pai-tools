@@ -38,6 +38,30 @@ export function loadToolConfig<T>(
 }
 
 /**
+ * Save (or merge) a tool's config to `.pait/{toolName}.json`.
+ * Shallow-merges `partial` into the existing on-disk config (if any).
+ */
+export function saveToolConfig<T>(
+	repoRoot: string,
+	toolName: string,
+	partial: Partial<T>
+): void {
+	const configPath = join(repoRoot, '.pait', `${toolName}.json`);
+	const paitDir = join(repoRoot, '.pait');
+	if (!existsSync(paitDir)) {
+		mkdirSync(paitDir, { recursive: true });
+	}
+
+	let existing: Record<string, unknown> = {};
+	if (existsSync(configPath)) {
+		existing = JSON.parse(readFileSync(configPath, 'utf-8'));
+	}
+
+	const merged = { ...existing, ...partial };
+	writeFileSync(configPath, JSON.stringify(merged, null, 2) + '\n');
+}
+
+/**
  * Ensure `.pait/.gitignore` exists with the standard ignore entries.
  * Called automatically when `.pait/` subdirectories are created.
  */

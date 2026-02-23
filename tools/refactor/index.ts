@@ -34,11 +34,12 @@
  * ============================================================================
  */
 
-import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync, existsSync, writeFileSync } from 'node:fs';
 import { join, extname, relative, basename } from 'node:path';
+import { createHash } from 'node:crypto';
 import { log, Spinner } from '../../shared/log.ts';
 import { runClaude } from '../../shared/claude.ts';
-import { findRepoRoot, loadToolConfig } from '../../shared/config.ts';
+import { findRepoRoot, loadToolConfig, getStateFilePath } from '../../shared/config.ts';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -106,6 +107,17 @@ interface AnalysisResult {
 	relativePath: string;
 	tier1: Tier1Result;
 	tier2: Tier2Result | null;
+	cached: boolean;
+}
+
+interface CacheEntry {
+	hash: string;
+	timestamp: string;
+	result: Tier2Result;
+}
+
+interface AnalysisCache {
+	entries: Record<string, CacheEntry>;
 }
 
 interface RefactorReport {
@@ -115,6 +127,7 @@ interface RefactorReport {
 	analyzedFiles: number;
 	flaggedFiles: number;
 	aiAnalyzed: number;
+	cacheHits: number;
 	results: AnalysisResult[];
 	summary: ReportSummary;
 }
@@ -242,6 +255,66 @@ const DEFAULT_PROFILE: LanguageProfile = {
 	classPattern: /^\s*(class|struct|interface)\s+\w+/gm,
 	importPattern: /^\s*(import|require|use|include)\s+/gm,
 };
+
+// ─── Cache & Hash Utilities ──────────────────────────────────────────────────
+
+function computeFileHash(filePath: string): string {
+	const content = readFileSync(filePath);
+	return createHash('sha256').update(content).digest('hex');
+}
+
+function loadCache(repoRoot: string): AnalysisCache {
+	const cachePath = getStateFilePath(repoRoot, 'refactor');
+	if (!existsSync(cachePath)) return { entries: {} };
+	try {
+		return JSON.parse(readFileSync(cachePath, 'utf-8')) as AnalysisCache;
+	} catch {
+		return { entries: {} };
+	}
+}
+
+function saveCache(repoRoot: string, cache: AnalysisCache): void {
+	const cachePath = getStateFilePath(repoRoot, 'refactor');
+	writeFileSync(cachePath, JSON.stringify(cache, null, 2));
+}
+
+// ─── GitHub Label Management ────────────────────────────────────────────────
+
+const LABEL_COLORS: Record<string, string> = {
+	'refactor': '1d76db',
+	'ai-suggested': 'c5def5',
+	'priority:high': 'e11d48',
+};
+
+async function ensureLabels(labels: string[], repoRoot: string): Promise<void> {
+	for (const label of labels) {
+		const check = Bun.spawnSync(['gh', 'label', 'list', '--search', label, '--json', 'name'], {
+			cwd: repoRoot,
+			stdout: 'pipe',
+			stderr: 'pipe',
+		});
+
+		const output = new TextDecoder().decode(check.stdout as Buffer).trim();
+		let exists = false;
+		try {
+			const parsed = JSON.parse(output) as { name: string }[];
+			exists = parsed.some(l => l.name === label);
+		} catch {}
+
+		if (!exists) {
+			const color = LABEL_COLORS[label] ?? 'ededed';
+			const create = Bun.spawnSync(
+				['gh', 'label', 'create', label, '--color', color, '--force'],
+				{ cwd: repoRoot, stdout: 'pipe', stderr: 'pipe' }
+			);
+			if (create.exitCode === 0) {
+				log.info(`Created missing label: ${label}`);
+			} else {
+				log.warn(`Could not create label '${label}' — issue creation may fail`);
+			}
+		}
+	}
+}
 
 // ─── Ignore Patterns ────────────────────────────────────────────────────────
 
@@ -624,7 +697,7 @@ function renderTerminalReport(report: RefactorReport, verbose: boolean): void {
 	console.log(`${COLORS.dim}${'─'.repeat(60)}${COLORS.reset}`);
 	console.log(`${COLORS.dim}Target:${COLORS.reset}   ${report.targetPath}`);
 	console.log(`${COLORS.dim}Files:${COLORS.reset}    ${report.totalFiles} discovered, ${report.analyzedFiles} analyzed, ${report.flaggedFiles} flagged`);
-	console.log(`${COLORS.dim}AI:${COLORS.reset}       ${report.aiAnalyzed} files sent to Claude`);
+	console.log(`${COLORS.dim}AI:${COLORS.reset}       ${report.aiAnalyzed} files analyzed (${report.cacheHits} from cache)`);
 	console.log(`${COLORS.dim}${'─'.repeat(60)}${COLORS.reset}`);
 	console.log();
 
@@ -661,7 +734,8 @@ function renderTerminalReport(report: RefactorReport, verbose: boolean): void {
 		}
 
 		if (tier2) {
-			console.log(`       ${COLORS.magenta}AI: ${tier2.responsibilities.length} responsibilities detected${COLORS.reset}`);
+			const cacheTag = result.cached ? ` ${COLORS.cyan}(cached)${COLORS.reset}` : '';
+			console.log(`       ${COLORS.magenta}AI: ${tier2.responsibilities.length} responsibilities detected${cacheTag}${COLORS.reset}`);
 			for (const r of tier2.responsibilities) {
 				console.log(`       ${COLORS.dim}  • ${r.name}: ${r.description}${COLORS.reset}`);
 			}
@@ -744,8 +818,11 @@ export async function refactor(flags: RefactorFlags): Promise<void> {
 	const flagged = tier1Results.filter(r => r.severity !== 'ok');
 	log.ok(`Analyzed ${tier1Results.length} files — ${flagged.length} flagged`);
 
-	// ── Tier 2: AI Semantic Analysis ──
+	// ── Tier 2: AI Semantic Analysis (with caching) ──
 	const tier2Results = new Map<string, Tier2Result>();
+	const cachedFiles = new Set<string>();
+	const cache = loadCache(repoRoot);
+	let cacheHits = 0;
 
 	if (!flags.tier1Only && flagged.length > 0) {
 		log.step('TIER 2 — AI SEMANTIC ANALYSIS');
@@ -754,22 +831,58 @@ export async function refactor(flags: RefactorFlags): Promise<void> {
 			.sort((a, b) => b.lineCount - a.lineCount)
 			.slice(0, flags.budget);
 
-		log.info(`Sending ${candidates.length} files to Claude for analysis (budget: ${flags.budget})`);
-		const aiSpinner = new Spinner();
+		// Check cache for each candidate
+		let freshCount = 0;
+		for (const candidate of candidates) {
+			const hash = computeFileHash(candidate.file);
+			const cacheKey = candidate.relativePath;
+			const cached = cache.entries[cacheKey];
 
-		for (let i = 0; i < candidates.length; i++) {
-			const candidate = candidates[i];
-			aiSpinner.start(`Analyzing ${candidate.relativePath} (${i + 1}/${candidates.length})`);
-
-			const result = await analyzeTier2(candidate.file, repoRoot);
-			if (result) {
-				tier2Results.set(candidate.file, result);
+			if (cached && cached.hash === hash) {
+				tier2Results.set(candidate.file, cached.result);
+				cachedFiles.add(candidate.file);
+				cacheHits++;
+			} else {
+				freshCount++;
 			}
-
-			aiSpinner.stop(`${COLORS.green}[OK]${COLORS.reset} ${candidate.relativePath}`);
 		}
 
-		log.ok(`AI analyzed ${tier2Results.size} files`);
+		if (cacheHits > 0) {
+			log.info(`Cache: ${cacheHits} hit(s), ${freshCount} file(s) need fresh analysis`);
+		}
+
+		if (freshCount > 0) {
+			log.info(`Sending ${freshCount} files to Claude for analysis (budget: ${flags.budget})`);
+			const aiSpinner = new Spinner();
+			let analyzed = 0;
+
+			for (const candidate of candidates) {
+				if (cachedFiles.has(candidate.file)) continue;
+
+				analyzed++;
+				aiSpinner.start(`Analyzing ${candidate.relativePath} (${analyzed}/${freshCount})`);
+
+				const result = await analyzeTier2(candidate.file, repoRoot);
+				if (result) {
+					tier2Results.set(candidate.file, result);
+
+					// Cache the result
+					const hash = computeFileHash(candidate.file);
+					cache.entries[candidate.relativePath] = {
+						hash,
+						timestamp: new Date().toISOString(),
+						result,
+					};
+				}
+
+				aiSpinner.stop(`${COLORS.green}[OK]${COLORS.reset} ${candidate.relativePath}`);
+			}
+
+			// Save updated cache
+			saveCache(repoRoot, cache);
+		}
+
+		log.ok(`AI analyzed ${tier2Results.size} files (${cacheHits} cached, ${freshCount} fresh)`);
 	} else if (flags.tier1Only) {
 		log.dim('Tier 2 skipped (--tier1-only)');
 	} else {
@@ -782,6 +895,7 @@ export async function refactor(flags: RefactorFlags): Promise<void> {
 		relativePath: t1.relativePath,
 		tier1: t1,
 		tier2: tier2Results.get(t1.file) ?? null,
+		cached: cachedFiles.has(t1.file),
 	}));
 
 	const critical = tier1Results.filter(r => r.severity === 'critical').length;
@@ -806,6 +920,7 @@ export async function refactor(flags: RefactorFlags): Promise<void> {
 		analyzedFiles: tier1Results.length,
 		flaggedFiles: flagged.length,
 		aiAnalyzed: tier2Results.size,
+		cacheHits,
 		results,
 		summary: {
 			critical,
@@ -827,8 +942,24 @@ export async function refactor(flags: RefactorFlags): Promise<void> {
 	if (flags.issues) {
 		log.step('GITHUB ISSUES');
 		const flaggedResults = results.filter(r => r.tier1.severity !== 'ok');
-		let created = 0;
 
+		// Collect all unique labels and ensure they exist
+		const allLabels = new Set<string>();
+		for (const result of flaggedResults) {
+			const issueData = buildIssueData(result);
+			if (issueData) {
+				for (const label of issueData.labels) {
+					allLabels.add(label);
+				}
+			}
+		}
+
+		if (!flags.dryRun && allLabels.size > 0) {
+			log.info('Ensuring required labels exist...');
+			await ensureLabels([...allLabels], repoRoot);
+		}
+
+		let created = 0;
 		for (const result of flaggedResults) {
 			const issueData = buildIssueData(result);
 			if (!issueData) continue;

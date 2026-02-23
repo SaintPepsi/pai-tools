@@ -34,10 +34,9 @@
  * ============================================================================
  */
 
-import { readFileSync, existsSync } from 'node:fs';
-import { join, relative, basename } from 'node:path';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { log, Spinner } from '../../shared/log.ts';
-import { runClaude } from '../../shared/claude.ts';
 import { findRepoRoot, loadToolConfig } from '../../shared/config.ts';
 import type {
 	RefactorFlags,
@@ -48,7 +47,9 @@ import type {
 	IssueData,
 } from './types.ts';
 import { computeFileHash, loadCache, saveCache } from './cache.ts';
-import { discoverFiles, getLanguageProfile } from './discovery.ts';
+import { discoverFiles } from './discovery.ts';
+import { analyzeTier1 } from './tier1.ts';
+import { analyzeTier2 } from './tier2.ts';
 
 export type { RefactorFlags } from './types.ts';
 
@@ -87,176 +88,6 @@ async function ensureLabels(labels: string[], repoRoot: string): Promise<void> {
 				log.warn(`Could not create label '${label}' — issue creation may fail`);
 			}
 		}
-	}
-}
-
-// ─── Tier 1: Heuristic Analysis ─────────────────────────────────────────────
-
-function countMatches(content: string, pattern: RegExp): number {
-	// Reset lastIndex and create fresh regex to avoid statefulness issues
-	const regex = new RegExp(pattern.source, pattern.flags);
-	const matches = content.match(regex);
-	return matches?.length ?? 0;
-}
-
-function analyzeTier1(filePath: string, rootPath: string, thresholdOverride: number | null): Tier1Result {
-	const content = readFileSync(filePath, 'utf-8');
-	const profile = getLanguageProfile(filePath);
-	const lines = content.split('\n');
-	const lineCount = lines.length;
-
-	const softThreshold = thresholdOverride ?? profile.softThreshold;
-	const hardThreshold = thresholdOverride ? Math.round(thresholdOverride * 2) : profile.hardThreshold;
-
-	const exportCount = countMatches(content, profile.exportPattern);
-	const functionCount = countMatches(content, profile.functionPattern);
-	const classCount = countMatches(content, profile.classPattern);
-	const importCount = countMatches(content, profile.importPattern);
-
-	const signals: string[] = [];
-
-	// Line count signals
-	if (lineCount > hardThreshold) {
-		signals.push(`${lineCount} lines exceeds hard threshold (${hardThreshold})`);
-	} else if (lineCount > softThreshold) {
-		signals.push(`${lineCount} lines exceeds soft threshold (${softThreshold})`);
-	}
-
-	// Function density (many functions = likely multiple responsibilities)
-	if (functionCount > 15) {
-		signals.push(`High function count: ${functionCount} functions`);
-	} else if (functionCount > 10) {
-		signals.push(`Elevated function count: ${functionCount} functions`);
-	}
-
-	// Export density (many exports = possibly a barrel file or mixed concerns)
-	if (exportCount > 10) {
-		signals.push(`High export count: ${exportCount} exports`);
-	}
-
-	// Multiple classes (strong SRP violation signal)
-	if (classCount > 1) {
-		signals.push(`Multiple classes in one file: ${classCount} classes`);
-	}
-
-	// Import fan-in (many imports = high coupling)
-	if (importCount > 20) {
-		signals.push(`High import count: ${importCount} imports (coupling risk)`);
-	} else if (importCount > 12) {
-		signals.push(`Elevated import count: ${importCount} imports`);
-	}
-
-	// Determine severity
-	let severity: 'ok' | 'warn' | 'critical' = 'ok';
-	if (lineCount > hardThreshold || signals.length >= 3) {
-		severity = 'critical';
-	} else if (lineCount > softThreshold || signals.length >= 1) {
-		severity = 'warn';
-	}
-
-	return {
-		file: filePath,
-		relativePath: relative(rootPath, filePath) || basename(filePath),
-		language: profile.name,
-		lineCount,
-		exportCount,
-		functionCount,
-		classCount,
-		importCount,
-		softThreshold,
-		hardThreshold,
-		severity,
-		signals,
-	};
-}
-
-// ─── Tier 2: AI Semantic Analysis ───────────────────────────────────────────
-
-const ANALYSIS_PROMPT = `You are a code structure analyst specializing in SOLID principles. Analyze this file using these precise definitions:
-
-## Single Responsibility Principle (SRP)
-Robert C. Martin: "A module should have one, and only one, reason to change."
-A "reason to change" means one actor or stakeholder. If two different actors (e.g., the CFO and the CTO) would request changes to the same file for different reasons, that file violates SRP. The test: "If I describe what this file does, do I need the word 'and'?" If yes, it likely has multiple responsibilities.
-
-Look for:
-- Multiple unrelated groups of functions that serve different stakeholders
-- Mixed concerns: business logic alongside I/O, formatting alongside computation, parsing alongside rendering
-- Functions that change for different reasons at different times
-
-## Dependency Inversion Principle (DIP)
-Robert C. Martin: "High-level modules should not depend on low-level modules. Both should depend on abstractions. Abstractions should not depend on details. Details should depend on abstractions."
-The test: Does this file import concrete implementations directly (database drivers, HTTP clients, file system calls, specific API clients) when it could depend on an interface or abstraction instead? High-level policy code should not know about low-level implementation details.
-
-Look for:
-- Direct imports of concrete implementations where an interface/type would allow swapping
-- High-level orchestration code mixed with low-level I/O or infrastructure details
-- Tight coupling to specific libraries that makes testing or replacement difficult
-
-## Additional Principles
-- DRY: Is there duplicated logic that indicates mixed concerns being handled in parallel?
-- YAGNI: Are there unused abstractions or over-engineered patterns that add complexity without value?
-
-Respond in this exact JSON format (no markdown, no code fences, just raw JSON):
-{
-  "responsibilities": [
-    {"name": "short name", "description": "what this responsibility does", "lineRanges": "e.g. 1-50, 120-180"}
-  ],
-  "suggestions": [
-    {"filename": "suggested-file-name.ts", "responsibilities": ["responsibility name"], "rationale": "why this split makes sense"}
-  ],
-  "principles": ["SRP: explanation of specific violation", "DIP: explanation of specific violation"],
-  "effort": "low|medium|high",
-  "summary": "One paragraph summary of the file's structure problems and recommended refactoring approach"
-}
-
-Rules:
-- Only suggest splits that genuinely improve the codebase
-- Each suggested file should have a clear, single responsibility (one reason to change)
-- For each SRP violation, name the two distinct actors/reasons that would drive changes
-- For each DIP violation, name the concrete dependency and what abstraction would replace it
-- If the file is actually well-structured despite its size, say so — size alone is not a violation
-- "effort" reflects the difficulty of the refactoring, not the file's badness
-- Keep responsibility names short (2-4 words)`;
-
-async function analyzeTier2(filePath: string, repoRoot: string): Promise<Tier2Result | null> {
-	let content: string;
-	try {
-		content = readFileSync(filePath, 'utf-8');
-	} catch {
-		return null;
-	}
-
-	// Truncate very large files to avoid overwhelming the model
-	const maxChars = 32_000;
-	const truncated = content.length > maxChars
-		? content.slice(0, maxChars) + '\n\n[... truncated ...]'
-		: content;
-
-	const userPrompt = `File: ${basename(filePath)}\nLanguage: ${getLanguageProfile(filePath).name}\n\n${truncated}`;
-
-	const result = await runClaude({
-		prompt: `${ANALYSIS_PROMPT}\n\n${userPrompt}`,
-		model: 'sonnet',
-		cwd: repoRoot,
-	});
-
-	if (!result.ok) {
-		log.warn(`AI analysis failed for ${basename(filePath)}: ${result.output.slice(0, 100)}`);
-		return null;
-	}
-
-	try {
-		// Extract JSON from response (handle potential markdown wrapping)
-		const jsonMatch = result.output.match(/\{[\s\S]*\}/);
-		if (!jsonMatch) {
-			log.warn(`No JSON in AI response for ${basename(filePath)}`);
-			return null;
-		}
-		const parsed = JSON.parse(jsonMatch[0]) as Tier2Result;
-		return { ...parsed, file: filePath };
-	} catch (e) {
-		log.warn(`Failed to parse AI response for ${basename(filePath)}`);
-		return null;
 	}
 }
 

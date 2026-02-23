@@ -116,10 +116,28 @@ function getIssueState(state: OrchestratorState, num: number, title?: string): I
 // GitHub helpers
 // ---------------------------------------------------------------------------
 
-async function fetchOpenIssues(): Promise<GitHubIssue[]> {
-	const result =
-		await $`gh issue list --state open --limit 200 --json number,title,body,state,labels`.text();
-	return JSON.parse(result);
+async function fetchOpenIssues(config: OrchestratorConfig): Promise<GitHubIssue[]> {
+	const authors = config.allowedAuthors?.length
+		? config.allowedAuthors
+		: [(await $`gh api user --jq .login`.text()).trim()];
+
+	log.info(`Filtering issues by author(s): ${authors.join(', ')}`);
+
+	const seen = new Set<number>();
+	const issues: GitHubIssue[] = [];
+
+	for (const author of authors) {
+		const result =
+			await $`gh issue list --state open --limit 200 --author ${author} --json number,title,body,state,labels`.text();
+		for (const issue of JSON.parse(result) as GitHubIssue[]) {
+			if (!seen.has(issue.number)) {
+				seen.add(issue.number);
+				issues.push(issue);
+			}
+		}
+	}
+
+	return issues;
 }
 
 function parseDependencies(body: string): number[] {
@@ -837,7 +855,7 @@ async function runMainLoop(
 				log.ok(`Split into: ${subIssueNumbers.map((n) => `#${n}`).join(', ')}`);
 				log.info('Re-fetching issues and rebuilding graph...');
 
-				const freshIssues = await fetchOpenIssues();
+				const freshIssues = await fetchOpenIssues(config);
 				const freshGraph = buildGraph(freshIssues, config);
 				const freshOrder = topologicalSort(freshGraph);
 
@@ -1113,7 +1131,7 @@ export async function orchestrate(flags: OrchestratorFlags): Promise<void> {
 
 	// Fetch issues and build graph
 	log.step('FETCHING ISSUES');
-	const issues = await fetchOpenIssues();
+	const issues = await fetchOpenIssues(config);
 	log.ok(`Fetched ${issues.length} open issues`);
 
 	const graph = buildGraph(issues, config);

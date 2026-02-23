@@ -63,6 +63,7 @@ export interface OrchestratorConfig {
 	allowedTools: string;
 	verify: VerifyCommand[];
 	e2e?: E2EConfig;
+	allowedAuthors?: string[];
 }
 
 export interface OrchestratorFlags {

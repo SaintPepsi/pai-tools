@@ -1,4 +1,4 @@
-# pait refactor
+# pait analyze
 
 AI-powered file structure analyzer. Identifies files that need decomposition using a two-tier approach: fast heuristics followed by Claude semantic analysis.
 
@@ -41,31 +41,31 @@ The analysis is grounded in Robert C. Martin's SOLID principles:
 
 ```bash
 # Full two-tier analysis
-pait refactor ./src
+pait analyze ./src
 
 # Heuristics only — free, instant, no AI calls
-pait refactor ./src --tier1-only
+pait analyze ./src --tier1-only
 
 # Create GitHub issues for flagged files
-pait refactor ./src --issues
+pait analyze ./src --issues
 
 # Preview issues without creating them
-pait refactor ./src --issues --dry-run
+pait analyze ./src --issues --dry-run
 
 # JSON output (for CI pipelines)
-pait refactor ./src --format json
+pait analyze ./src --format json
 
 # Custom line threshold
-pait refactor ./src --threshold 150
+pait analyze ./src --threshold 150
 
 # Limit AI analysis calls
-pait refactor ./src --budget 10
+pait analyze ./src --budget 10
 
 # Show all files, not just flagged
-pait refactor ./src --verbose
+pait analyze ./src --verbose
 
 # Analyze a single file
-pait refactor ./src/big-file.ts
+pait analyze ./src/big-file.ts
 ```
 
 ## Flags
@@ -103,7 +103,7 @@ Thresholds are auto-detected from file extensions:
 
 ## Per-Project Config
 
-Create `.pait/refactor.json` in any project repo root:
+Create `.pait/analyze.json` in any project repo root:
 
 ```json
 {
@@ -124,11 +124,11 @@ When using `--issues`, each flagged file gets an issue:
 ## Output Example
 
 ```
-REFACTOR ANALYSIS
+STRUCTURE ANALYSIS
 ────────────────────────────────────────────────────────────
 Target:   ./src
 Files:    47 discovered, 47 analyzed, 3 flagged
-AI:       3 files sent to Claude
+AI:       3 files analyzed (0 from cache)
 ────────────────────────────────────────────────────────────
 
   [!!!] src/api/handlers.ts

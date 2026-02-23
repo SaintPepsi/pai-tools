@@ -17,7 +17,7 @@
  */
 
 import { orchestrate, parseFlags } from './tools/orchestrator/index.ts';
-import { refactor, parseRefactorFlags } from './tools/refactor/index.ts';
+import { analyze, parseAnalyzeFlags } from './tools/analyze/index.ts';
 import { setup } from './tools/setup.ts';
 import { $ } from 'bun';
 import { join } from 'node:path';
@@ -34,13 +34,13 @@ const HELP = `\x1b[36mpait\x1b[0m — PAI Tools CLI
 
 \x1b[1mCOMMANDS\x1b[0m
   orchestrate    Run the issue orchestrator
-  refactor       Analyze file structure, suggest splits (AI-powered)
+  analyze        Analyze file structure, suggest splits (AI-powered)
   update         Pull latest pai-tools from remote
   version        Show current version
   setup          Register pait globally and configure PATH
   help           Show this help message
 
-\x1b[1mREFACTOR FLAGS\x1b[0m
+\x1b[1mANALYZE FLAGS\x1b[0m
   <path>           Target directory or file (default: .)
   --threshold <N>  Soft line threshold (default: auto per language)
   --tier1-only     Skip AI analysis, heuristics only
@@ -69,9 +69,9 @@ const commands = new Map<string, CommandHandler>([
 		const flags = parseFlags(process.argv.slice(3));
 		await orchestrate(flags);
 	}],
-	['refactor', async () => {
-		const flags = parseRefactorFlags(process.argv.slice(3));
-		await refactor(flags);
+	['analyze', async () => {
+		const flags = parseAnalyzeFlags(process.argv.slice(3));
+		await analyze(flags);
 	}],
 	['setup', setup],
 	['update', async () => {

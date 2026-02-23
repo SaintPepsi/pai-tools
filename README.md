@@ -21,17 +21,17 @@ pait <command> [flags]
 
 Automated GitHub issue implementation orchestrator. See [tools/orchestrator/README.md](tools/orchestrator/README.md) for usage, config, and options.
 
-### `pait refactor`
+### `pait analyze`
 
 AI-powered file structure analyzer. Two-tier approach: fast heuristics flag candidates, then Claude Sonnet detects SRP/DIP violations and suggests concrete file splits. Supports 10 languages, GitHub issue creation, and JSON output for CI.
 
 ```bash
-pait refactor ./src                    # Full analysis
-pait refactor ./src --tier1-only       # Heuristics only (free)
-pait refactor ./src --issues --dry-run # Preview GitHub issues
+pait analyze ./src                    # Full analysis
+pait analyze ./src --tier1-only       # Heuristics only (free)
+pait analyze ./src --issues --dry-run # Preview GitHub issues
 ```
 
-See [tools/refactor/README.md](tools/refactor/README.md) for full docs, flags, and config.
+See [tools/analyze/README.md](tools/analyze/README.md) for full docs, flags, and config.
 
 ### `pait update`
 
@@ -61,8 +61,8 @@ pai-tools/
     │   ├── index.ts                # Main orchestration logic
     │   ├── types.ts                # TypeScript interfaces
     │   └── defaults.ts             # Default config values
-    └── refactor/
-        ├── README.md               # Refactor tool docs, flags, config
+    └── analyze/
+        ├── README.md               # Analyze tool docs, flags, config
         └── index.ts                # File structure analyzer (heuristics + AI)
 ```
 

@@ -2,7 +2,7 @@
  * .pait/ directory discovery, config loading, and state path resolution.
  */
 
-import { existsSync, readFileSync, mkdirSync, copyFileSync } from 'node:fs';
+import { existsSync, readFileSync, mkdirSync, copyFileSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 
 /**
@@ -38,13 +38,30 @@ export function loadToolConfig<T>(
 }
 
 /**
+ * Ensure `.pait/.gitignore` exists with the standard ignore entries.
+ * Called automatically when `.pait/` subdirectories are created.
+ */
+function ensurePaitGitignore(repoRoot: string): void {
+	const gitignorePath = join(repoRoot, '.pait', '.gitignore');
+	if (existsSync(gitignorePath)) return;
+
+	const paitDir = join(repoRoot, '.pait');
+	if (!existsSync(paitDir)) {
+		mkdirSync(paitDir, { recursive: true });
+	}
+
+	writeFileSync(gitignorePath, 'node_modules/\nworktrees/\nstate/\nlogs/\n');
+}
+
+/**
  * Get the path to a tool's state file at `.pait/state/{toolName}.json`.
- * Creates the `.pait/state/` directory if it doesn't exist.
+ * Creates the `.pait/state/` directory and `.pait/.gitignore` if they don't exist.
  */
 export function getStateFilePath(repoRoot: string, toolName: string): string {
 	const stateDir = join(repoRoot, '.pait', 'state');
 	if (!existsSync(stateDir)) {
 		mkdirSync(stateDir, { recursive: true });
+		ensurePaitGitignore(repoRoot);
 	}
 	return join(stateDir, `${toolName}.json`);
 }

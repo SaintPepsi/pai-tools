@@ -17,6 +17,7 @@
  */
 
 import { orchestrate, parseFlags } from './tools/orchestrator/index.ts';
+import { analyze, parseAnalyzeFlags } from './tools/analyze/index.ts';
 import { setup } from './tools/setup.ts';
 import { $ } from 'bun';
 import { join } from 'node:path';
@@ -33,10 +34,21 @@ const HELP = `\x1b[36mpait\x1b[0m — PAI Tools CLI
 
 \x1b[1mCOMMANDS\x1b[0m
   orchestrate    Run the issue orchestrator
+  analyze        Analyze file structure, suggest splits (AI-powered)
   update         Pull latest pai-tools from remote
   version        Show current version
   setup          Register pait globally and configure PATH
   help           Show this help message
+
+\x1b[1mANALYZE FLAGS\x1b[0m
+  <path>           Target directory or file (default: .)
+  --threshold <N>  Soft line threshold (default: auto per language)
+  --tier1-only     Skip AI analysis, heuristics only
+  --issues         Create GitHub issues for recommendations
+  --dry-run        Show what issues would be created
+  --format <type>  Output: terminal (default) | json
+  --budget <N>     Max AI analysis calls (default: 50)
+  --quiet, -q     Show only flagged files (default: show all)
 
 \x1b[1mORCHESTRATOR FLAGS\x1b[0m
   --dry-run        Show execution plan without acting
@@ -57,14 +69,38 @@ const commands = new Map<string, CommandHandler>([
 		const flags = parseFlags(process.argv.slice(3));
 		await orchestrate(flags);
 	}],
+	['analyze', async () => {
+		const flags = parseAnalyzeFlags(process.argv.slice(3));
+		await analyze(flags);
+	}],
 	['setup', setup],
 	['update', async () => {
 		const repoRoot = import.meta.dir;
 		const before = await getVersion();
 		console.log(`\x1b[36m[INFO]\x1b[0m Updating pai-tools from v${before}...`);
+
+		const currentBranch = (await $`git -C ${repoRoot} rev-parse --abbrev-ref HEAD`.text()).trim();
+		const needSwitch = currentBranch !== 'master';
+		let didStash = false;
+
+		if (needSwitch) {
+			const status = (await $`git -C ${repoRoot} status --porcelain`.text()).trim();
+			if (status) {
+				await $`git -C ${repoRoot} stash push -m "pait-update-autostash"`.quiet();
+				didStash = true;
+			}
+			await $`git -C ${repoRoot} checkout master`.quiet();
+		}
+
 		const result = await $`git -C ${repoRoot} pull --ff-only`.text();
 		console.log(result.trim());
 		const after = await getVersion();
+
+		if (needSwitch) {
+			await $`git -C ${repoRoot} checkout ${currentBranch}`.quiet();
+			if (didStash) await $`git -C ${repoRoot} stash pop`.quiet().nothrow();
+		}
+
 		if (before === after) {
 			console.log(`\x1b[32m[OK]\x1b[0m pai-tools v${after} is up to date`);
 		} else {

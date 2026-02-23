@@ -21,6 +21,18 @@ pait <command> [flags]
 
 Automated GitHub issue implementation orchestrator. See [tools/orchestrator/README.md](tools/orchestrator/README.md) for usage, config, and options.
 
+### `pait analyze`
+
+AI-powered file structure analyzer. Two-tier approach: fast heuristics flag candidates, then Claude Sonnet detects SRP/DIP violations and suggests concrete file splits. Supports 10 languages, GitHub issue creation, and JSON output for CI.
+
+```bash
+pait analyze ./src                    # Full analysis
+pait analyze ./src --tier1-only       # Heuristics only (free)
+pait analyze ./src --issues --dry-run # Preview GitHub issues
+```
+
+See [tools/analyze/README.md](tools/analyze/README.md) for full docs, flags, and config.
+
 ### `pait update`
 
 Pull the latest pai-tools from the remote repository. Since `bun link` symlinks to the repo, this is all you need to stay current.
@@ -38,16 +50,20 @@ Each target project stores its config in a `.pait/` directory at the repo root. 
 ```
 pai-tools/
 ├── cli.ts                          # Entry point, subcommand routing
+├── CLAUDE.md                       # AI agent instructions for this repo
 ├── shared/
 │   ├── log.ts                      # Colored terminal logging
 │   ├── claude.ts                   # Claude CLI helper (stdin piping)
-│   └── config.ts                   # .pai/ discovery, config loading, state paths
+│   └── config.ts                   # .pait/ discovery, config loading, state paths
 └── tools/
-    └── orchestrator/
-        ├── README.md               # Orchestrator docs, config, usage
-        ├── index.ts                # Main orchestration logic
-        ├── types.ts                # TypeScript interfaces
-        └── defaults.ts             # Default config values
+    ├── orchestrator/
+    │   ├── README.md               # Orchestrator docs, config, usage
+    │   ├── index.ts                # Main orchestration logic
+    │   ├── types.ts                # TypeScript interfaces
+    │   └── defaults.ts             # Default config values
+    └── analyze/
+        ├── README.md               # Analyze tool docs, flags, config
+        └── index.ts                # File structure analyzer (heuristics + AI)
 ```
 
 ## Requirements

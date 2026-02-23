@@ -69,7 +69,7 @@ export function parseFlags(args: string[]): OrchestratorFlags {
 // State management
 // ---------------------------------------------------------------------------
 
-function loadState(stateFile: string): OrchestratorState | null {
+export function loadState(stateFile: string): OrchestratorState | null {
 	try {
 		const content = readFileSync(stateFile, 'utf-8');
 		if (!content) return null;
@@ -79,12 +79,12 @@ function loadState(stateFile: string): OrchestratorState | null {
 	}
 }
 
-function saveState(state: OrchestratorState, stateFile: string): void {
+export function saveState(state: OrchestratorState, stateFile: string): void {
 	state.updatedAt = new Date().toISOString();
 	writeFileSync(stateFile, JSON.stringify(state, null, 2));
 }
 
-function initState(): OrchestratorState {
+export function initState(): OrchestratorState {
 	return {
 		version: 1,
 		startedAt: new Date().toISOString(),
@@ -93,7 +93,7 @@ function initState(): OrchestratorState {
 	};
 }
 
-function getIssueState(state: OrchestratorState, num: number, title?: string): IssueState {
+export function getIssueState(state: OrchestratorState, num: number, title?: string): IssueState {
 	if (!state.issues[num]) {
 		state.issues[num] = {
 			number: num,
@@ -140,7 +140,7 @@ async function fetchOpenIssues(config: OrchestratorConfig): Promise<GitHubIssue[
 	return issues;
 }
 
-function parseDependencies(body: string): number[] {
+export function parseDependencies(body: string): number[] {
 	const depLine = body.split('\n').find((line) => /depends\s+on/i.test(line));
 	if (!depLine) return [];
 
@@ -148,7 +148,7 @@ function parseDependencies(body: string): number[] {
 	return [...matches].map((m) => Number(m[1]));
 }
 
-function toKebabSlug(title: string): string {
+export function toKebabSlug(title: string): string {
 	return title
 		.toLowerCase()
 		.replace(/^\[\d+\]\s*/, '')
@@ -161,7 +161,7 @@ function toKebabSlug(title: string): string {
 // Dependency graph + topological sort
 // ---------------------------------------------------------------------------
 
-function buildGraph(
+export function buildGraph(
 	issues: GitHubIssue[],
 	config: OrchestratorConfig
 ): Map<number, DependencyNode> {
@@ -179,7 +179,7 @@ function buildGraph(
 	return graph;
 }
 
-function topologicalSort(graph: Map<number, DependencyNode>): number[] {
+export function topologicalSort(graph: Map<number, DependencyNode>): number[] {
 	const visited = new Set<number>();
 	const visiting = new Set<number>();
 	const result: number[] = [];

@@ -1,0 +1,8 @@
+{
+  "verify": [
+    {
+      "name": "test",
+      "cmd": "bun test"
+    }
+  ]
+}

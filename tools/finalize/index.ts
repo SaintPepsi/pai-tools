@@ -309,12 +309,21 @@ async function mergePR(
 		return { ok: true };
 	}
 
-	try {
-		await $`gh pr merge ${prNumber} --${strategy} --delete-branch`.quiet();
-		return { ok: true };
-	} catch (err) {
-		return { ok: false, error: String(err) };
+	// Retry once — GitHub may need a moment to process a force-push before merge
+	for (let attempt = 0; attempt < 2; attempt++) {
+		try {
+			await $`gh pr merge ${prNumber} --${strategy} --delete-branch`.quiet();
+			return { ok: true };
+		} catch (err) {
+			if (attempt === 0) {
+				log.info('Merge failed, retrying in 3s (GitHub may still be processing)...');
+				await Bun.sleep(3000);
+			} else {
+				return { ok: false, error: String(err) };
+			}
+		}
 	}
+	return { ok: false, error: 'Unreachable' };
 }
 
 // ---------------------------------------------------------------------------
@@ -468,9 +477,18 @@ export async function finalize(flags: FinalizeFlags): Promise<void> {
 					log.error(`Rebase failed for PR #${pr.prNumber}`);
 					continue;
 				}
+			}
 
-				// Push rebased branch
-				await $`git -C ${repoRoot} push --force-with-lease origin ${pr.branch}`.quiet().catch(() => {});
+			// Push rebased branch (always — remote must match local after rebase)
+			await $`git -C ${repoRoot} push --force-with-lease origin ${pr.branch}`.quiet().catch(() => {});
+		}
+
+		// Retarget dependent PRs before merge (prevents orphaning when branch is deleted)
+		for (const other of ordered) {
+			if (other.baseBranch === pr.branch) {
+				log.info(`Retargeting PR #${other.prNumber} base: ${pr.branch} → ${baseBranch}`);
+				await $`gh pr edit ${other.prNumber} --base ${baseBranch}`.quiet().catch(() => {});
+				other.baseBranch = baseBranch;
 			}
 		}
 

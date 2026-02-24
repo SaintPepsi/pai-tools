@@ -3,9 +3,13 @@ import { $ } from 'bun';
 import { mkdtempSync, existsSync, rmSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createWorktree, removeWorktree, localBranchExists, deleteLocalBranch } from './index.ts';
+import {
+	createWorktree, removeWorktree, localBranchExists, deleteLocalBranch,
+	parseFlags, parseDependencies, toKebabSlug, buildGraph, topologicalSort,
+	loadState, saveState, initState, getIssueState
+} from './index.ts';
 import { RunLogger } from '../../shared/logging.ts';
-import type { OrchestratorConfig } from './types.ts';
+import type { OrchestratorConfig, GitHubIssue } from './types.ts';
 
 // Minimal config for testing
 const testConfig: OrchestratorConfig = {
@@ -172,5 +176,309 @@ describe('worktree management', () => {
 		// Should not throw
 		await deleteLocalBranch('nonexistent-branch', repoRoot);
 		expect(await localBranchExists('nonexistent-branch', repoRoot)).toBe(false);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// parseFlags
+// ---------------------------------------------------------------------------
+
+describe('parseFlags', () => {
+	test('defaults are all false/null with no args', () => {
+		const flags = parseFlags([]);
+		expect(flags.dryRun).toBe(false);
+		expect(flags.reset).toBe(false);
+		expect(flags.statusOnly).toBe(false);
+		expect(flags.skipE2e).toBe(false);
+		expect(flags.skipSplit).toBe(false);
+		expect(flags.noVerify).toBe(false);
+		expect(flags.singleMode).toBe(false);
+		expect(flags.singleIssue).toBeNull();
+		expect(flags.fromIssue).toBeNull();
+	});
+
+	test('boolean flags parse correctly', () => {
+		const flags = parseFlags(['--dry-run', '--reset', '--status', '--skip-e2e', '--skip-split', '--no-verify']);
+		expect(flags.dryRun).toBe(true);
+		expect(flags.reset).toBe(true);
+		expect(flags.statusOnly).toBe(true);
+		expect(flags.skipE2e).toBe(true);
+		expect(flags.skipSplit).toBe(true);
+		expect(flags.noVerify).toBe(true);
+	});
+
+	test('--single without number sets singleMode but null singleIssue', () => {
+		const flags = parseFlags(['--single']);
+		expect(flags.singleMode).toBe(true);
+		expect(flags.singleIssue).toBeNull();
+	});
+
+	test('--single with number sets both singleMode and singleIssue', () => {
+		const flags = parseFlags(['--single', '115']);
+		expect(flags.singleMode).toBe(true);
+		expect(flags.singleIssue).toBe(115);
+	});
+
+	test('--single ignores non-numeric next arg', () => {
+		const flags = parseFlags(['--single', '--dry-run']);
+		expect(flags.singleMode).toBe(true);
+		expect(flags.singleIssue).toBeNull();
+		expect(flags.dryRun).toBe(true);
+	});
+
+	test('--from parses issue number', () => {
+		const flags = parseFlags(['--from', '42']);
+		expect(flags.fromIssue).toBe(42);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// parseDependencies
+// ---------------------------------------------------------------------------
+
+describe('parseDependencies', () => {
+	test('returns empty array when no dependency line', () => {
+		expect(parseDependencies('Just a regular issue body')).toEqual([]);
+	});
+
+	test('parses single dependency', () => {
+		expect(parseDependencies('Depends on #10')).toEqual([10]);
+	});
+
+	test('parses multiple dependencies', () => {
+		expect(parseDependencies('Depends on #5, #10, #15')).toEqual([5, 10, 15]);
+	});
+
+	test('case insensitive matching', () => {
+		expect(parseDependencies('DEPENDS ON #7')).toEqual([7]);
+		expect(parseDependencies('depends on #7')).toEqual([7]);
+	});
+
+	test('finds dependency line in multi-line body', () => {
+		const body = `## Description
+Some work to do.
+
+Depends on #3, #4
+
+## Notes
+More info here.`;
+		expect(parseDependencies(body)).toEqual([3, 4]);
+	});
+
+	test('returns empty for body with no hash references', () => {
+		expect(parseDependencies('Depends on nothing')).toEqual([]);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// toKebabSlug
+// ---------------------------------------------------------------------------
+
+describe('toKebabSlug', () => {
+	test('converts basic title to kebab case', () => {
+		expect(toKebabSlug('Add User Authentication')).toBe('add-user-authentication');
+	});
+
+	test('strips leading issue number prefix', () => {
+		expect(toKebabSlug('[42] Fix login bug')).toBe('fix-login-bug');
+	});
+
+	test('replaces special characters with hyphens', () => {
+		expect(toKebabSlug('Fix: memory leak (critical!)')).toBe('fix-memory-leak-critical');
+	});
+
+	test('strips leading and trailing hyphens', () => {
+		expect(toKebabSlug('---hello world---')).toBe('hello-world');
+	});
+
+	test('truncates to 50 characters', () => {
+		const longTitle = 'This is a very long issue title that exceeds the fifty character limit by quite a lot';
+		const slug = toKebabSlug(longTitle);
+		expect(slug.length).toBeLessThanOrEqual(50);
+	});
+
+	test('handles empty string', () => {
+		expect(toKebabSlug('')).toBe('');
+	});
+
+	test('collapses multiple special chars into single hyphen', () => {
+		expect(toKebabSlug('hello   &&&   world')).toBe('hello-world');
+	});
+});
+
+// ---------------------------------------------------------------------------
+// buildGraph + topologicalSort
+// ---------------------------------------------------------------------------
+
+function makeIssue(number: number, title: string, body: string): GitHubIssue {
+	return { number, title, body, state: 'open', labels: [] };
+}
+
+describe('buildGraph', () => {
+	test('builds graph with correct branch names', () => {
+		const issues = [makeIssue(1, 'Add feature', '')];
+		const graph = buildGraph(issues, testConfig);
+
+		expect(graph.size).toBe(1);
+		const node = graph.get(1)!;
+		expect(node.branch).toBe('feat/1-add-feature');
+		expect(node.dependsOn).toEqual([]);
+	});
+
+	test('captures dependencies from issue body', () => {
+		const issues = [
+			makeIssue(1, 'Base', ''),
+			makeIssue(2, 'Child', 'Depends on #1')
+		];
+		const graph = buildGraph(issues, testConfig);
+
+		expect(graph.get(2)!.dependsOn).toEqual([1]);
+	});
+});
+
+describe('topologicalSort', () => {
+	test('sorts independent issues by insertion order', () => {
+		const issues = [
+			makeIssue(3, 'C', ''),
+			makeIssue(1, 'A', ''),
+			makeIssue(2, 'B', '')
+		];
+		const graph = buildGraph(issues, testConfig);
+		const sorted = topologicalSort(graph);
+
+		expect(sorted).toEqual([3, 1, 2]);
+	});
+
+	test('sorts dependencies before dependents', () => {
+		const issues = [
+			makeIssue(2, 'Child', 'Depends on #1'),
+			makeIssue(1, 'Parent', '')
+		];
+		const graph = buildGraph(issues, testConfig);
+		const sorted = topologicalSort(graph);
+
+		expect(sorted.indexOf(1)).toBeLessThan(sorted.indexOf(2));
+	});
+
+	test('handles diamond dependency', () => {
+		const issues = [
+			makeIssue(1, 'Root', ''),
+			makeIssue(2, 'Left', 'Depends on #1'),
+			makeIssue(3, 'Right', 'Depends on #1'),
+			makeIssue(4, 'Merge', 'Depends on #2, #3')
+		];
+		const graph = buildGraph(issues, testConfig);
+		const sorted = topologicalSort(graph);
+
+		expect(sorted.indexOf(1)).toBeLessThan(sorted.indexOf(2));
+		expect(sorted.indexOf(1)).toBeLessThan(sorted.indexOf(3));
+		expect(sorted.indexOf(2)).toBeLessThan(sorted.indexOf(4));
+		expect(sorted.indexOf(3)).toBeLessThan(sorted.indexOf(4));
+	});
+
+	test('throws on circular dependency', () => {
+		const issues = [
+			makeIssue(1, 'A', 'Depends on #2'),
+			makeIssue(2, 'B', 'Depends on #1')
+		];
+		const graph = buildGraph(issues, testConfig);
+
+		expect(() => topologicalSort(graph)).toThrow(/Circular dependency/);
+	});
+
+	test('handles chain dependency', () => {
+		const issues = [
+			makeIssue(3, 'C', 'Depends on #2'),
+			makeIssue(2, 'B', 'Depends on #1'),
+			makeIssue(1, 'A', '')
+		];
+		const graph = buildGraph(issues, testConfig);
+		const sorted = topologicalSort(graph);
+
+		expect(sorted).toEqual([1, 2, 3]);
+	});
+
+	test('ignores dependencies on issues not in the graph', () => {
+		const issues = [
+			makeIssue(5, 'Orphan dep', 'Depends on #999')
+		];
+		const graph = buildGraph(issues, testConfig);
+		const sorted = topologicalSort(graph);
+
+		expect(sorted).toEqual([5]);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// State management
+// ---------------------------------------------------------------------------
+
+describe('state management', () => {
+	let tempDir: string;
+
+	beforeEach(() => {
+		tempDir = mkdtempSync(join(tmpdir(), 'pai-state-test-'));
+	});
+
+	afterEach(() => {
+		rmSync(tempDir, { recursive: true, force: true });
+	});
+
+	test('initState returns valid empty state', () => {
+		const state = initState();
+		expect(state.version).toBe(1);
+		expect(state.issues).toEqual({});
+		expect(state.startedAt).toBeTruthy();
+		expect(state.updatedAt).toBeTruthy();
+	});
+
+	test('saveState and loadState roundtrip', () => {
+		const stateFile = join(tempDir, 'state.json');
+		const state = initState();
+		getIssueState(state, 42, 'Test issue');
+
+		saveState(state, stateFile);
+		const loaded = loadState(stateFile);
+
+		expect(loaded).not.toBeNull();
+		expect(loaded!.version).toBe(1);
+		expect(loaded!.issues[42]).toBeDefined();
+		expect(loaded!.issues[42].title).toBe('Test issue');
+		expect(loaded!.issues[42].status).toBe('pending');
+	});
+
+	test('loadState returns null for missing file', () => {
+		expect(loadState(join(tempDir, 'nonexistent.json'))).toBeNull();
+	});
+
+	test('getIssueState creates new entry with defaults', () => {
+		const state = initState();
+		const issue = getIssueState(state, 10, 'New issue');
+
+		expect(issue.number).toBe(10);
+		expect(issue.title).toBe('New issue');
+		expect(issue.status).toBe('pending');
+		expect(issue.branch).toBeNull();
+		expect(issue.prNumber).toBeNull();
+		expect(issue.error).toBeNull();
+	});
+
+	test('getIssueState returns existing entry on repeat call', () => {
+		const state = initState();
+		const first = getIssueState(state, 10, 'First title');
+		first.status = 'completed';
+
+		const second = getIssueState(state, 10, 'Different title');
+		expect(second.status).toBe('completed');
+		expect(second.title).toBe('First title');
+	});
+
+	test('getIssueState fills null title on repeat call', () => {
+		const state = initState();
+		getIssueState(state, 10);
+		expect(state.issues[10].title).toBeNull();
+
+		getIssueState(state, 10, 'Late title');
+		expect(state.issues[10].title).toBe('Late title');
 	});
 });

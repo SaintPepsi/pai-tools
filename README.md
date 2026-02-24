@@ -54,7 +54,8 @@ pai-tools/
 ├── shared/
 │   ├── log.ts                      # Colored terminal logging
 │   ├── claude.ts                   # Claude CLI helper (stdin piping)
-│   └── config.ts                   # .pait/ discovery, config loading, state paths
+│   ├── config.ts                   # .pait/ discovery, config loading/saving, state paths
+│   └── logging.ts                  # Structured JSONL run logging
 └── tools/
     ├── orchestrator/
     │   ├── README.md               # Orchestrator docs, config, usage

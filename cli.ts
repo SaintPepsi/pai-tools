@@ -14,6 +14,7 @@
  *   --reset          Clear state and start fresh
  *   --skip-e2e       Skip E2E verification step
  *   --skip-split     Skip issue splitting assessment
+ *   --no-verify      Skip verification requirement
  */
 
 import { orchestrate, parseFlags } from './tools/orchestrator/index.ts';
@@ -48,7 +49,9 @@ const HELP = `\x1b[36mpait\x1b[0m — PAI Tools CLI
   --dry-run        Show what issues would be created
   --format <type>  Output: terminal (default) | json
   --budget <N>     Max AI analysis calls (default: 50)
+  --include <glob> Additional glob patterns to include
   --quiet, -q     Show only flagged files (default: show all)
+  --verbose        Show detailed analysis output
 
 \x1b[1mORCHESTRATOR FLAGS\x1b[0m
   --dry-run        Show execution plan without acting
@@ -58,6 +61,7 @@ const HELP = `\x1b[36mpait\x1b[0m — PAI Tools CLI
   --reset          Clear state and start fresh
   --skip-e2e       Skip E2E verification step
   --skip-split     Skip issue splitting assessment
+  --no-verify      Skip verification requirement
 
 \x1b[90mhttps://github.com/SaintPepsi/pai-tools\x1b[0m
 `;

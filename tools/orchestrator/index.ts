@@ -12,7 +12,7 @@ import { join, resolve } from 'node:path';
 import { log, Spinner } from '../../shared/log.ts';
 import { runClaude } from '../../shared/claude.ts';
 import { RunLogger } from '../../shared/logging.ts';
-import { findRepoRoot, loadToolConfig, getStateFilePath, migrateStateIfNeeded } from '../../shared/config.ts';
+import { findRepoRoot, loadToolConfig, saveToolConfig, getStateFilePath, migrateStateIfNeeded } from '../../shared/config.ts';
 import { ORCHESTRATOR_DEFAULTS } from './defaults.ts';
 import type {
 	GitHubIssue,
@@ -20,7 +20,8 @@ import type {
 	IssueState,
 	OrchestratorState,
 	OrchestratorConfig,
-	OrchestratorFlags
+	OrchestratorFlags,
+	VerifyCommand
 } from './types.ts';
 
 // ---------------------------------------------------------------------------
@@ -57,6 +58,7 @@ export function parseFlags(args: string[]): OrchestratorFlags {
 		statusOnly: args.includes('--status'),
 		skipE2e: args.includes('--skip-e2e'),
 		skipSplit: args.includes('--skip-split'),
+		noVerify: args.includes('--no-verify'),
 		singleMode: args.includes('--single'),
 		singleIssue,
 		fromIssue
@@ -67,7 +69,7 @@ export function parseFlags(args: string[]): OrchestratorFlags {
 // State management
 // ---------------------------------------------------------------------------
 
-function loadState(stateFile: string): OrchestratorState | null {
+export function loadState(stateFile: string): OrchestratorState | null {
 	try {
 		const content = readFileSync(stateFile, 'utf-8');
 		if (!content) return null;
@@ -77,12 +79,12 @@ function loadState(stateFile: string): OrchestratorState | null {
 	}
 }
 
-function saveState(state: OrchestratorState, stateFile: string): void {
+export function saveState(state: OrchestratorState, stateFile: string): void {
 	state.updatedAt = new Date().toISOString();
 	writeFileSync(stateFile, JSON.stringify(state, null, 2));
 }
 
-function initState(): OrchestratorState {
+export function initState(): OrchestratorState {
 	return {
 		version: 1,
 		startedAt: new Date().toISOString(),
@@ -91,7 +93,7 @@ function initState(): OrchestratorState {
 	};
 }
 
-function getIssueState(state: OrchestratorState, num: number, title?: string): IssueState {
+export function getIssueState(state: OrchestratorState, num: number, title?: string): IssueState {
 	if (!state.issues[num]) {
 		state.issues[num] = {
 			number: num,
@@ -114,13 +116,31 @@ function getIssueState(state: OrchestratorState, num: number, title?: string): I
 // GitHub helpers
 // ---------------------------------------------------------------------------
 
-async function fetchOpenIssues(): Promise<GitHubIssue[]> {
-	const result =
-		await $`gh issue list --state open --limit 200 --json number,title,body,state,labels`.text();
-	return JSON.parse(result);
+async function fetchOpenIssues(config: OrchestratorConfig): Promise<GitHubIssue[]> {
+	const authors = config.allowedAuthors?.length
+		? config.allowedAuthors
+		: [(await $`gh api user --jq .login`.text()).trim()];
+
+	log.info(`Filtering issues by author(s): ${authors.join(', ')}`);
+
+	const seen = new Set<number>();
+	const issues: GitHubIssue[] = [];
+
+	for (const author of authors) {
+		const result =
+			await $`gh issue list --state open --limit 200 --author ${author} --json number,title,body,state,labels`.text();
+		for (const issue of JSON.parse(result) as GitHubIssue[]) {
+			if (!seen.has(issue.number)) {
+				seen.add(issue.number);
+				issues.push(issue);
+			}
+		}
+	}
+
+	return issues;
 }
 
-function parseDependencies(body: string): number[] {
+export function parseDependencies(body: string): number[] {
 	const depLine = body.split('\n').find((line) => /depends\s+on/i.test(line));
 	if (!depLine) return [];
 
@@ -128,7 +148,7 @@ function parseDependencies(body: string): number[] {
 	return [...matches].map((m) => Number(m[1]));
 }
 
-function toKebabSlug(title: string): string {
+export function toKebabSlug(title: string): string {
 	return title
 		.toLowerCase()
 		.replace(/^\[\d+\]\s*/, '')
@@ -141,7 +161,7 @@ function toKebabSlug(title: string): string {
 // Dependency graph + topological sort
 // ---------------------------------------------------------------------------
 
-function buildGraph(
+export function buildGraph(
 	issues: GitHubIssue[],
 	config: OrchestratorConfig
 ): Map<number, DependencyNode> {
@@ -159,7 +179,7 @@ function buildGraph(
 	return graph;
 }
 
-function topologicalSort(graph: Map<number, DependencyNode>): number[] {
+export function topologicalSort(graph: Map<number, DependencyNode>): number[] {
 	const visited = new Set<number>();
 	const visiting = new Set<number>();
 	const result: number[] = [];
@@ -835,7 +855,7 @@ async function runMainLoop(
 				log.ok(`Split into: ${subIssueNumbers.map((n) => `#${n}`).join(', ')}`);
 				log.info('Re-fetching issues and rebuilding graph...');
 
-				const freshIssues = await fetchOpenIssues();
+				const freshIssues = await fetchOpenIssues(config);
 				const freshGraph = buildGraph(freshIssues, config);
 				const freshOrder = topologicalSort(freshGraph);
 
@@ -1020,6 +1040,42 @@ Commit your fixes referencing #${issueNum}.`;
 }
 
 // ---------------------------------------------------------------------------
+// Interactive verify prompt
+// ---------------------------------------------------------------------------
+
+import { createInterface } from 'node:readline';
+
+function promptLine(question: string): Promise<string> {
+	const rl = createInterface({ input: process.stdin, output: process.stdout });
+	return new Promise((resolve) => {
+		rl.question(question, (answer) => {
+			rl.close();
+			resolve(answer.trim());
+		});
+	});
+}
+
+async function promptForVerifyCommands(): Promise<VerifyCommand[]> {
+	log.warn('No verification commands configured.');
+	log.info('The orchestrator requires verification steps to ensure implementations are correct.');
+	log.info('Common examples: "bun tsc --noEmit" (typecheck), "bun test" (tests), "bun run lint" (lint)\n');
+
+	const commands: VerifyCommand[] = [];
+	let index = 1;
+
+	while (true) {
+		const cmd = await promptLine(`  Verify command ${index} (empty to finish): `);
+		if (!cmd) break;
+
+		const name = await promptLine(`  Name for this step (e.g. "typecheck", "test"): `);
+		commands.push({ name: name || `verify-${index}`, cmd });
+		index++;
+	}
+
+	return commands;
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
@@ -1059,9 +1115,23 @@ export async function orchestrate(flags: OrchestratorFlags): Promise<void> {
 		return;
 	}
 
+	// Require verification unless --no-verify
+	if (config.verify.length === 0 && !config.e2e && !flags.noVerify) {
+		const commands = await promptForVerifyCommands();
+		if (commands.length === 0) {
+			log.error('No verification commands provided. Use --no-verify to skip verification.');
+			process.exit(1);
+		}
+		config.verify = commands;
+
+		// Save to project config so future runs don't re-prompt
+		saveToolConfig<OrchestratorConfig>(repoRoot, 'orchestrator', { verify: commands });
+		log.ok(`Saved ${commands.length} verification step(s) to .pait/orchestrator.json`);
+	}
+
 	// Fetch issues and build graph
 	log.step('FETCHING ISSUES');
-	const issues = await fetchOpenIssues();
+	const issues = await fetchOpenIssues(config);
 	log.ok(`Fetched ${issues.length} open issues`);
 
 	const graph = buildGraph(issues, config);

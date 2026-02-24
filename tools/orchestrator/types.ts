@@ -63,6 +63,7 @@ export interface OrchestratorConfig {
 	allowedTools: string;
 	verify: VerifyCommand[];
 	e2e?: E2EConfig;
+	allowedAuthors?: string[];
 }
 
 export interface OrchestratorFlags {
@@ -71,6 +72,7 @@ export interface OrchestratorFlags {
 	statusOnly: boolean;
 	skipE2e: boolean;
 	skipSplit: boolean;
+	noVerify: boolean;
 	singleMode: boolean;
 	singleIssue: number | null;
 	fromIssue: number | null;

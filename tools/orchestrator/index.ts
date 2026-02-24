@@ -14,14 +14,14 @@ import { runClaude } from '../../shared/claude.ts';
 import { RunLogger } from '../../shared/logging.ts';
 import { findRepoRoot, loadToolConfig, saveToolConfig, getStateFilePath, migrateStateIfNeeded } from '../../shared/config.ts';
 import { ORCHESTRATOR_DEFAULTS } from './defaults.ts';
+import { runVerify, promptForVerifyCommands } from '../verify/index.ts';
 import type {
 	GitHubIssue,
 	DependencyNode,
 	IssueState,
 	OrchestratorState,
 	OrchestratorConfig,
-	OrchestratorFlags,
-	VerifyCommand
+	OrchestratorFlags
 } from './types.ts';
 
 // ---------------------------------------------------------------------------
@@ -492,59 +492,8 @@ async function implementIssue(
 }
 
 // ---------------------------------------------------------------------------
-// Verification pipeline
+// Verification pipeline — delegated to tools/verify
 // ---------------------------------------------------------------------------
-
-async function runVerification(
-	config: OrchestratorConfig,
-	flags: OrchestratorFlags,
-	worktreePath: string,
-	currentIssueNumber: number,
-	logger: RunLogger
-): Promise<{ ok: boolean; failedStep?: string; error?: string }> {
-	for (const step of config.verify) {
-		log.info(`Running ${step.name}: ${step.cmd}`);
-		try {
-			await $`${{ raw: step.cmd }}`.cwd(worktreePath).quiet();
-			log.ok(`${step.name} passed`);
-			logger.verifyPass(currentIssueNumber, step.name);
-		} catch (err) {
-			const output = err instanceof Error ? err.message : String(err);
-			logger.verifyFail(currentIssueNumber, step.name, output.slice(-2000));
-			return { ok: false, failedStep: step.name, error: output.slice(-2000) };
-		}
-	}
-
-	// E2E (only if configured and not skipped)
-	if (config.e2e && !flags.skipE2e) {
-		log.info(`Running E2E: ${config.e2e.run}`);
-		try {
-			await $`${{ raw: config.e2e.run }}`.cwd(worktreePath).quiet();
-			log.ok('E2E passed');
-			logger.verifyPass(currentIssueNumber, 'e2e');
-		} catch {
-			log.warn('E2E failed — attempting snapshot update...');
-			try {
-				await $`${{ raw: config.e2e.update }}`.cwd(worktreePath).quiet();
-				await $`${{ raw: config.e2e.run }}`.cwd(worktreePath).quiet();
-				log.ok('E2E passed after snapshot update');
-				logger.verifyPass(currentIssueNumber, 'e2e (after snapshot update)');
-				// Stage updated snapshots
-				const glob = config.e2e.snapshotGlob;
-				await $`git -C ${worktreePath} add -A ${glob}`.quiet().catch(() => {});
-				await $`git -C ${worktreePath} commit -m ${'test: update E2E snapshots for #' + currentIssueNumber}`
-					.quiet()
-					.catch(() => {});
-			} catch (err) {
-				const output = err instanceof Error ? err.message : String(err);
-				logger.verifyFail(currentIssueNumber, 'e2e', output.slice(-2000));
-				return { ok: false, failedStep: 'e2e', error: output.slice(-2000) };
-			}
-		}
-	}
-
-	return { ok: true };
-}
 
 // ---------------------------------------------------------------------------
 // PR creation
@@ -946,7 +895,14 @@ async function runMainLoop(
 				);
 			}
 
-			const verifyResult = await runVerification(config, flags, worktreePath, issueNum, logger);
+			const verifyResult = await runVerify({
+				verify: config.verify,
+				e2e: config.e2e,
+				cwd: worktreePath,
+				skipE2e: flags.skipE2e,
+				logger,
+				issueNumber: issueNum
+			});
 			if (verifyResult.ok) {
 				verifyOk = true;
 				break;
@@ -1037,42 +993,6 @@ Commit your fixes referencing #${issueNum}.`;
 		log.step('ALL ISSUES COMPLETED');
 		printStatus(state);
 	}
-}
-
-// ---------------------------------------------------------------------------
-// Interactive verify prompt
-// ---------------------------------------------------------------------------
-
-import { createInterface } from 'node:readline';
-
-function promptLine(question: string): Promise<string> {
-	const rl = createInterface({ input: process.stdin, output: process.stdout });
-	return new Promise((resolve) => {
-		rl.question(question, (answer) => {
-			rl.close();
-			resolve(answer.trim());
-		});
-	});
-}
-
-async function promptForVerifyCommands(): Promise<VerifyCommand[]> {
-	log.warn('No verification commands configured.');
-	log.info('The orchestrator requires verification steps to ensure implementations are correct.');
-	log.info('Common examples: "bun tsc --noEmit" (typecheck), "bun test" (tests), "bun run lint" (lint)\n');
-
-	const commands: VerifyCommand[] = [];
-	let index = 1;
-
-	while (true) {
-		const cmd = await promptLine(`  Verify command ${index} (empty to finish): `);
-		if (!cmd) break;
-
-		const name = await promptLine(`  Name for this step (e.g. "typecheck", "test"): `);
-		commands.push({ name: name || `verify-${index}`, cmd });
-		index++;
-	}
-
-	return commands;
 }
 
 // ---------------------------------------------------------------------------

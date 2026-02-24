@@ -33,10 +33,11 @@ When adding or modifying a tool:
 
 - **Author filtering:** The orchestrator only processes GitHub issues authored by the authenticated `gh` user (or users listed in `allowedAuthors` config). This prevents prompt injection via malicious public issues. Never bypass this filtering.
 - **Verification required:** The orchestrator requires `verify` commands to be configured. If none are set, it prompts the user interactively. Use `--no-verify` to skip (not recommended). Always configure verification for production use.
+- **Type ownership:** `VerifyCommand` and `E2EConfig` types are owned by `tools/verify/types.ts`. The orchestrator re-exports them from `tools/orchestrator/types.ts` for backward compatibility.
 
 ## Testing
 
 - Run tests: `bun test`
 - Run tools directly: `bun run cli.ts <command> [flags]` or via the global alias `pait <command>`.
-- **CLI help sync test** (`cli.test.ts`): Asserts every flag in `parseFlags` / `parseAnalyzeFlags` appears in the `HELP` string in `cli.ts`. If you add a flag, update the HELP text or the test will fail.
+- **CLI help sync test** (`cli.test.ts`): Asserts every flag in `parseFlags` / `parseAnalyzeFlags` / `parseVerifyFlags` / `parseFinalizeFlags` appears in the `HELP` string in `cli.ts`. If you add a flag, update the HELP text or the test will fail.
 - Tests are colocated: `tools/{name}/{name}.test.ts` and `shared/{module}.test.ts`.

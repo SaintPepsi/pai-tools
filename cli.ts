@@ -19,6 +19,8 @@
 
 import { orchestrate, parseFlags } from './tools/orchestrator/index.ts';
 import { analyze, parseAnalyzeFlags } from './tools/analyze/index.ts';
+import { verify, parseVerifyFlags } from './tools/verify/index.ts';
+import { finalize, parseFinalizeFlags } from './tools/finalize/index.ts';
 import { setup } from './tools/setup.ts';
 import { $ } from 'bun';
 import { join } from 'node:path';
@@ -36,6 +38,8 @@ const HELP = `\x1b[36mpait\x1b[0m — PAI Tools CLI
 \x1b[1mCOMMANDS\x1b[0m
   orchestrate    Run the issue orchestrator
   analyze        Analyze file structure, suggest splits (AI-powered)
+  verify         Run verification commands
+  finalize       Merge orchestrated PRs
   update         Pull latest pai-tools from remote
   version        Show current version
   setup          Register pait globally and configure PATH
@@ -63,6 +67,18 @@ const HELP = `\x1b[36mpait\x1b[0m — PAI Tools CLI
   --skip-split     Skip issue splitting assessment
   --no-verify      Skip verification requirement
 
+\x1b[1mVERIFY FLAGS\x1b[0m
+  --skip-e2e       Skip E2E verification step
+  --name <step>    Run only the named step
+  --json           Output results as JSON
+
+\x1b[1mFINALIZE FLAGS\x1b[0m
+  --dry-run           Show merge plan without acting
+  --single            Merge only the next PR, then stop
+  --no-verify         Skip post-merge verification
+  --strategy <type>   Merge strategy: squash (default) | merge | rebase
+  --from <N>          Start from issue #N
+
 \x1b[90mhttps://github.com/SaintPepsi/pai-tools\x1b[0m
 `;
 
@@ -76,6 +92,14 @@ const commands = new Map<string, CommandHandler>([
 	['analyze', async () => {
 		const flags = parseAnalyzeFlags(process.argv.slice(3));
 		await analyze(flags);
+	}],
+	['verify', async () => {
+		const flags = parseVerifyFlags(process.argv.slice(3));
+		await verify(flags);
+	}],
+	['finalize', async () => {
+		const flags = parseFinalizeFlags(process.argv.slice(3));
+		await finalize(flags);
 	}],
 	['setup', setup],
 	['update', async () => {

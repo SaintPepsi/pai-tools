@@ -974,6 +974,7 @@ Commit your fixes referencing #${issueNum}.`;
 		// Mark complete
 		const durationMs = Date.now() - issueStartTime;
 		issueState.status = 'completed';
+		issueState.error = null;
 		issueState.prNumber = prResult.prNumber ?? null;
 		issueState.completedAt = new Date().toISOString();
 		saveState(state, stateFile);

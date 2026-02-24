@@ -524,7 +524,7 @@ async function createPR(
 
 		const prBody = `## Summary
 
-Implements #${issue.number}
+Closes #${issue.number}
 
 ## Changes
 

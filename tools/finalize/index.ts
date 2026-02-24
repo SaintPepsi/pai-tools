@@ -498,6 +498,9 @@ export async function finalize(flags: FinalizeFlags): Promise<void> {
 			}
 		}
 
+		// Close the associated issue (belt-and-suspenders — PR body also has "Closes #N")
+		await $`gh issue close ${pr.issueNumber}`.quiet().catch(() => {});
+
 		prState.status = 'merged';
 		prState.mergedAt = new Date().toISOString();
 		saveFinalizeState(state, stateFile);

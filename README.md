@@ -80,7 +80,8 @@ pai-tools/
 │   ├── log.ts                      # Colored terminal logging
 │   ├── claude.ts                   # Claude CLI helper (stdin piping)
 │   ├── config.ts                   # .pait/ discovery, config loading/saving, state paths
-│   └── logging.ts                  # Structured JSONL run logging
+│   ├── logging.ts                  # Structured JSONL run logging
+│   └── prompt.ts                   # Interactive readline prompt helper
 └── tools/
     ├── orchestrator/
     │   ├── README.md               # Orchestrator docs, config, usage
@@ -97,7 +98,15 @@ pai-tools/
     │   └── types.ts                # Finalize types (FinalizeFlags, MergeOrder, etc.)
     └── analyze/
         ├── README.md               # Analyze tool docs, flags, config
-        └── index.ts                # File structure analyzer (heuristics + AI)
+        ├── index.ts                # Main orchestrator (imports all modules)
+        ├── types.ts                # TypeScript interfaces
+        ├── language-profiles.ts    # Language detection and thresholds
+        ├── cache.ts                # SHA-256 file hashing and analysis cache
+        ├── discovery.ts            # File walker with ignore patterns
+        ├── tier1.ts                # Heuristic analysis (line counts, signals)
+        ├── tier2.ts                # AI semantic analysis via Claude
+        ├── formatters.ts           # Terminal and JSON output rendering
+        └── github.ts               # Label management and issue creation
 ```
 
 ## Requirements

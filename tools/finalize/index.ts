@@ -7,8 +7,9 @@
 
 import { $ } from 'bun';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
-import { createInterface } from 'node:readline';
+import { join } from 'node:path';
 import { log } from '../../shared/log.ts';
+import { promptLine } from '../../shared/prompt.ts';
 import { runClaude } from '../../shared/claude.ts';
 import { findRepoRoot, loadToolConfig, getStateFilePath } from '../../shared/config.ts';
 import { runVerify } from '../verify/index.ts';
@@ -210,16 +211,6 @@ export async function detectConflicts(repoRoot: string): Promise<ConflictInfo[]>
 	}
 }
 
-function promptLine(question: string): Promise<string> {
-	const rl = createInterface({ input: process.stdin, output: process.stdout });
-	return new Promise((resolve) => {
-		rl.question(question, (answer) => {
-			rl.close();
-			resolve(answer.trim());
-		});
-	});
-}
-
 export async function presentConflicts(
 	conflicts: ConflictInfo[]
 ): Promise<Map<string, string>> {
@@ -258,7 +249,7 @@ export async function resolveConflicts(
 			await $`git -C ${repoRoot} add ${c.file}`.quiet();
 		} else {
 			// Custom intent: use Claude to resolve
-			const conflictContent = readFileSync(`${repoRoot}/${c.file}`, 'utf-8');
+			const conflictContent = readFileSync(join(repoRoot, c.file), 'utf-8');
 			const prompt = `You are resolving a git merge conflict in the file "${c.file}".
 
 The user's intent for resolving this conflict is: "${intent}"
@@ -276,7 +267,7 @@ Output ONLY the resolved file content. No explanation, no code fences, just the 
 			});
 
 			if (result.ok && result.output.trim()) {
-				writeFileSync(`${repoRoot}/${c.file}`, result.output);
+				writeFileSync(join(repoRoot, c.file), result.output);
 				await $`git -C ${repoRoot} add ${c.file}`.quiet();
 			} else {
 				log.error(`Failed to resolve ${c.file} via Claude`);
@@ -285,9 +276,9 @@ Output ONLY the resolved file content. No explanation, no code fences, just the 
 		}
 	}
 
-	// Continue rebase
+	// Continue rebase (GIT_EDITOR=true prevents editor from opening in non-interactive context)
 	try {
-		await $`git -C ${repoRoot} rebase --continue`.quiet();
+		await $`git -C ${repoRoot} rebase --continue`.env({ ...process.env, GIT_EDITOR: 'true' }).quiet();
 		return true;
 	} catch {
 		log.error('Rebase continue failed after conflict resolution');
@@ -301,7 +292,7 @@ export async function autoResolveConflicts(
 	repoRoot: string
 ): Promise<boolean> {
 	for (const c of conflicts) {
-		const conflictContent = readFileSync(`${repoRoot}/${c.file}`, 'utf-8');
+		const conflictContent = readFileSync(join(repoRoot, c.file), 'utf-8');
 		const prompt = `You are resolving a git merge conflict in the file "${c.file}".
 
 Resolve this conflict by keeping both changes where possible. If the changes are incompatible, prefer the incoming (feature branch) version marked with >>>>>>> but integrate any non-conflicting parts from the current branch marked with <<<<<<<.
@@ -319,7 +310,7 @@ Output ONLY the resolved file content. No explanation, no code fences, just the 
 		});
 
 		if (result.ok && result.output.trim()) {
-			writeFileSync(`${repoRoot}/${c.file}`, result.output);
+			writeFileSync(join(repoRoot, c.file), result.output);
 			await $`git -C ${repoRoot} add ${c.file}`.quiet();
 			log.ok(`Auto-resolved: ${c.file}`);
 		} else {
@@ -328,9 +319,9 @@ Output ONLY the resolved file content. No explanation, no code fences, just the 
 		}
 	}
 
-	// Continue rebase
+	// Continue rebase (GIT_EDITOR=true prevents editor from opening in non-interactive context)
 	try {
-		await $`git -C ${repoRoot} rebase --continue`.quiet();
+		await $`git -C ${repoRoot} rebase --continue`.env({ ...process.env, GIT_EDITOR: 'true' }).quiet();
 		return true;
 	} catch {
 		log.error('Rebase continue failed after auto-resolution');
@@ -530,7 +521,9 @@ export async function finalize(flags: FinalizeFlags): Promise<void> {
 		}
 
 		// Push rebased branch (always — remote must match local after rebase)
-		await $`git -C ${repoRoot} push --force-with-lease origin ${pr.branch}`.quiet().catch(() => {});
+		await $`git -C ${repoRoot} push --force-with-lease origin ${pr.branch}`.quiet().catch((e) => {
+			log.warn(`Force push failed for ${pr.branch}: ${String(e).slice(0, 200)}`);
+		});
 
 		// Retarget dependent PRs before merge (prevents orphaning when branch is deleted)
 		for (const other of ordered) {
@@ -570,6 +563,7 @@ export async function finalize(flags: FinalizeFlags): Promise<void> {
 
 		prState.status = 'merged';
 		prState.mergedAt = new Date().toISOString();
+		prState.error = null;
 		saveFinalizeState(state, stateFile);
 		log.ok(`PR #${pr.prNumber} merged (issue #${pr.issueNumber})`);
 

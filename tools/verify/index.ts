@@ -6,8 +6,8 @@
  */
 
 import { $ } from 'bun';
-import { createInterface } from 'node:readline';
 import { log } from '../../shared/log.ts';
+import { promptLine } from '../../shared/prompt.ts';
 import { findRepoRoot, loadToolConfig } from '../../shared/config.ts';
 import type {
 	VerifyCommand,
@@ -110,16 +110,6 @@ export async function runVerify(opts: VerifyOptions): Promise<VerifyResult> {
 // ---------------------------------------------------------------------------
 // Interactive verify prompt
 // ---------------------------------------------------------------------------
-
-function promptLine(question: string): Promise<string> {
-	const rl = createInterface({ input: process.stdin, output: process.stdout });
-	return new Promise((resolve) => {
-		rl.question(question, (answer) => {
-			rl.close();
-			resolve(answer.trim());
-		});
-	});
-}
 
 export async function promptForVerifyCommands(): Promise<VerifyCommand[]> {
 	log.warn('No verification commands configured.');

@@ -2,15 +2,14 @@ import { describe, test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-describe('finalize state: error clearing on merge', () => {
+describe('finalize source: merge success path clears error (regression)', () => {
 	test('source code clears error on successful merge (regression)', () => {
 		// The merge success path must set prState.error = null.
 		// Matches the pattern: status = 'merged' followed by error = null.
 		const source = readFileSync(join(import.meta.dir, 'index.ts'), 'utf-8');
-		const mergedBlock = source.slice(
-			source.indexOf("prState.status = 'merged'"),
-			source.indexOf("prState.status = 'merged'") + 200
-		);
+		const mergedIdx = source.indexOf("prState.status = 'merged'");
+		const nextStatusIdx = source.indexOf("prState.status =", mergedIdx + 1);
+		const mergedBlock = source.slice(mergedIdx, nextStatusIdx === -1 ? mergedIdx + 400 : nextStatusIdx);
 		expect(mergedBlock).toContain('prState.error = null');
 	});
 });
@@ -71,12 +70,21 @@ describe('shared promptLine module', () => {
 		);
 		expect(sharedSource).toContain('export function promptLine');
 
-		// Verify verify/index.ts also doesn't define it locally
+		// verify/index.ts no longer uses promptLine (moved to orchestrator/prompt.ts)
 		const verifySource = readFileSync(
 			join(import.meta.dir, '../verify/index.ts'),
 			'utf-8'
 		);
 		expect(verifySource).not.toContain('function promptLine');
-		expect(verifySource).toContain("from '../../shared/prompt.ts'");
+		// verify/index.ts must not import shared/prompt.ts after refactor
+		expect(verifySource).not.toContain("from '../../shared/prompt.ts'");
+
+		// promptForVerifyCommands now lives in orchestrator/prompt.ts and imports from shared
+		const orchestratorPromptSource = readFileSync(
+			join(import.meta.dir, '../orchestrator/prompt.ts'),
+			'utf-8'
+		);
+		expect(orchestratorPromptSource).not.toContain('function promptLine');
+		expect(orchestratorPromptSource).toContain("from '../../shared/prompt.ts'");
 	});
 });

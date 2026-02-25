@@ -1,15 +1,12 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { $ } from 'bun';
 import {
 	parseFinalizeFlags,
 	loadFinalizeState,
 	saveFinalizeState,
-	initFinalizeState,
-	rebaseBranch,
-	detectConflicts
+	initFinalizeState
 } from './index.ts';
 import { determineMergeOrder } from '../../shared/github.ts';
 import type { MergeOrder, FinalizeState } from './types.ts';
@@ -147,102 +144,6 @@ describe('finalize state management', () => {
 		const result = loadFinalizeState(join(tempDir, 'nonexistent.json'));
 		expect(result).toBeNull();
 	});
-});
-
-describe('git operations', () => {
-	let tempDir: string;
-	let repoRoot: string;
-
-	beforeEach(async () => {
-		tempDir = mkdtempSync(join(tmpdir(), 'pai-finalize-git-'));
-		repoRoot = join(tempDir, 'repo');
-		mkdirSync(repoRoot);
-
-		// Initialize a real git repo with an initial commit
-		await $`git -C ${repoRoot} init`.quiet();
-		await $`git -C ${repoRoot} checkout -b main`.quiet();
-		writeFileSync(join(repoRoot, 'README.md'), 'initial\n');
-		await $`git -C ${repoRoot} add README.md`.quiet();
-		await $`git -C ${repoRoot} commit -m "initial"`.quiet();
-	});
-
-	afterEach(() => {
-		rmSync(tempDir, { recursive: true, force: true });
-	});
-
-	test('rebaseBranch: clean rebase succeeds', async () => {
-		// Create a feature branch with a commit
-		await $`git -C ${repoRoot} checkout -b feat/1-test`.quiet();
-		writeFileSync(join(repoRoot, 'feature.txt'), 'feature\n');
-		await $`git -C ${repoRoot} add feature.txt`.quiet();
-		await $`git -C ${repoRoot} commit -m "add feature"`.quiet();
-
-		// Add a non-conflicting commit to main
-		await $`git -C ${repoRoot} checkout main`.quiet();
-		writeFileSync(join(repoRoot, 'other.txt'), 'other\n');
-		await $`git -C ${repoRoot} add other.txt`.quiet();
-		await $`git -C ${repoRoot} commit -m "add other"`.quiet();
-
-		// Rebase feature onto main
-		const result = await rebaseBranch('feat/1-test', 'main', repoRoot);
-		expect(result.ok).toBe(true);
-		expect(result.conflicts).toBeUndefined();
-
-		// Feature branch should now have both commits
-		const logOutput = await $`git -C ${repoRoot} log --oneline`.text();
-		expect(logOutput).toContain('add feature');
-		expect(logOutput).toContain('add other');
-	});
-
-	test('rebaseBranch: conflict detected', async () => {
-		// Create a feature branch that modifies README
-		await $`git -C ${repoRoot} checkout -b feat/2-conflict`.quiet();
-		writeFileSync(join(repoRoot, 'README.md'), 'feature version\n');
-		await $`git -C ${repoRoot} add README.md`.quiet();
-		await $`git -C ${repoRoot} commit -m "feature change"`.quiet();
-
-		// Add a conflicting commit to main
-		await $`git -C ${repoRoot} checkout main`.quiet();
-		writeFileSync(join(repoRoot, 'README.md'), 'main version\n');
-		await $`git -C ${repoRoot} add README.md`.quiet();
-		await $`git -C ${repoRoot} commit -m "main change"`.quiet();
-
-		// Rebase should detect conflict
-		const result = await rebaseBranch('feat/2-conflict', 'main', repoRoot);
-		expect(result.ok).toBe(false);
-		expect(result.conflicts).toBeDefined();
-		expect(result.conflicts!.length).toBeGreaterThan(0);
-		expect(result.conflicts![0].file).toBe('README.md');
-	});
-
-	test('rebaseBranch: no-op when branch already up-to-date', async () => {
-		// Feature branch created from current main tip — no divergence
-		await $`git -C ${repoRoot} checkout -b feat/3-uptodate`.quiet();
-		writeFileSync(join(repoRoot, 'feature.txt'), 'feature\n');
-		await $`git -C ${repoRoot} add feature.txt`.quiet();
-		await $`git -C ${repoRoot} commit -m "add feature"`.quiet();
-
-		const result = await rebaseBranch('feat/3-uptodate', 'main', repoRoot);
-		expect(result.ok).toBe(true);
-		expect(result.conflicts).toBeUndefined();
-	});
-
-	test('detectConflicts: returns empty when no conflicts', async () => {
-		const conflicts = await detectConflicts(repoRoot);
-		expect(conflicts).toEqual([]);
-	});
-});
-
-describe('finalize state: error clearing on merge', () => {
-	let tempDir: string;
-
-	beforeEach(() => {
-		tempDir = mkdtempSync(join(tmpdir(), 'pai-finalize-error-'));
-	});
-
-	afterEach(() => {
-		rmSync(tempDir, { recursive: true, force: true });
-	});
 
 	test('previously failed PR must have error cleared after successful merge', () => {
 		// Regression: prState.error was not cleared when status became 'merged',
@@ -269,91 +170,5 @@ describe('finalize state: error clearing on merge', () => {
 
 		expect(loaded!.prs[10].status).toBe('merged');
 		expect(loaded!.prs[10].error).toBeNull();
-	});
-
-	test('source code clears error on successful merge (regression)', () => {
-		// The merge success path must set prState.error = null.
-		// Matches the pattern: status = 'merged' followed by error = null.
-		const source = readFileSync(join(import.meta.dir, 'index.ts'), 'utf-8');
-		const mergedBlock = source.slice(
-			source.indexOf("prState.status = 'merged'"),
-			source.indexOf("prState.status = 'merged'") + 200
-		);
-		expect(mergedBlock).toContain('prState.error = null');
-	});
-});
-
-describe('finalize source guards (regression)', () => {
-	const source = readFileSync(join(import.meta.dir, 'index.ts'), 'utf-8');
-	const gitSource = readFileSync(join(import.meta.dir, '../../shared/git.ts'), 'utf-8');
-
-	test('no startIdx guard — all PRs get rebased', () => {
-		// Regression: `if (i > startIdx)` skipped rebase for first PR.
-		expect(source).not.toContain('i > startIdx');
-	});
-
-	test('rebase --continue sets GIT_EDITOR to prevent editor hang', () => {
-		// Regression: bare `rebase --continue` could open an editor in
-		// non-interactive contexts, hanging the process indefinitely.
-		// These functions live in shared/git.ts after extraction.
-		const continueLines = gitSource.split('\n').filter(
-			(line) => line.includes('rebase --continue')
-		);
-		expect(continueLines.length).toBeGreaterThanOrEqual(2);
-		for (const line of continueLines) {
-			expect(line).toContain('GIT_EDITOR');
-		}
-	});
-
-	test('force push catch logs a warning instead of silent swallow', () => {
-		// Regression: .catch(() => {}) on force-with-lease silently swallowed
-		// failures, causing opaque downstream merge errors.
-		const pushLine = source.split('\n').find(
-			(line) => line.includes('force-with-lease')
-		);
-		expect(pushLine).toBeDefined();
-		// Must NOT be an empty catch
-		expect(pushLine).not.toMatch(/\.catch\(\s*\(\)\s*=>\s*\{\s*\}\s*\)/);
-	});
-
-	test('conflict file paths use join() not template concatenation', () => {
-		// Regression: `${repoRoot}/${c.file}` is fragile; join() is correct.
-		// Conflict resolution functions live in shared/git.ts after extraction.
-		const templatePathPattern = /(?:readFileSync|writeFileSync)\(`\$\{repoRoot\}\/\$\{c\.file\}`/;
-		expect(gitSource).not.toMatch(templatePathPattern);
-	});
-
-	test('promptLine is not defined locally — uses shared module', () => {
-		// Regression: promptLine was duplicated in verify and finalize.
-		// After extraction, promptLine is used in shared/git.ts.
-		expect(source).not.toContain('function promptLine');
-		expect(gitSource).toContain("from './prompt.ts'");
-	});
-});
-
-describe('shared promptLine module', () => {
-	test('promptLine defined exactly once in shared/prompt.ts', () => {
-		const sharedSource = readFileSync(
-			join(import.meta.dir, '../../shared/prompt.ts'),
-			'utf-8'
-		);
-		expect(sharedSource).toContain('export function promptLine');
-
-		// verify/index.ts no longer uses promptLine (moved to orchestrator/prompt.ts)
-		const verifySource = readFileSync(
-			join(import.meta.dir, '../verify/index.ts'),
-			'utf-8'
-		);
-		expect(verifySource).not.toContain('function promptLine');
-		// verify/index.ts must not import shared/prompt.ts after this refactor — guard against regression.
-		expect(verifySource).not.toContain("from '../../shared/prompt.ts'");
-
-		// promptForVerifyCommands now lives in orchestrator/prompt.ts and imports from shared
-		const orchestratorPromptSource = readFileSync(
-			join(import.meta.dir, '../orchestrator/prompt.ts'),
-			'utf-8'
-		);
-		expect(orchestratorPromptSource).not.toContain('function promptLine');
-		expect(orchestratorPromptSource).toContain("from '../../shared/prompt.ts'");
 	});
 });

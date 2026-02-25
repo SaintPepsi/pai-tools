@@ -179,6 +179,13 @@ pait finalize --single
 
 # Check: main branch has the merged changes
 
+# Check stacked PR retarget: if the merged PR was a dependency,
+# verify dependent PRs had their base branch retargeted to main
+
+gh pr list --json number,baseRefName,headRefName --jq '.[] | "\(.number) base:\(.baseRefName) head:\(.headRefName)"'
+
+# EXPECT: All remaining PRs now target main (not the merged branch)
+
 Phase 6: Test pait finalize (remaining PRs)
 
 pait finalize
@@ -191,7 +198,15 @@ pait finalize
 
 # All 5 issues auto-closed on GitHub
 
-# Check: gh issue list --state open shows 0 issues from Phase 2
+# Explicit auto-close verification:
+
+gh issue list --state closed --json number,title --jq '.[] | "#\(.number) \(.title)"'
+
+# EXPECT: All 5 Phase 2 issues appear as CLOSED
+
+gh issue list --state open --json number,title --jq '.[] | "#\(.number) \(.title)"'
+
+# EXPECT: 0 open issues from Phase 2 (issues from later phases may be open)
 
 Phase 7: Test conflict resolution (deliberate conflict)
 
@@ -341,7 +356,136 @@ git log --oneline -5
 
 # EXPECT: A merge commit like "Merge pull request #N ..."
 
-Phase 8: Verify idempotency
+Phase 12: First-PR rebase (main diverged)
+
+# This tests the fix for the first-PR-no-rebase bug.
+# When main has diverged since orchestration, even the first PR
+# in the queue needs rebasing. Previously this was skipped.
+
+# Create 2 independent issues
+
+gh issue create --title "Add abs function to math.ts" \
+  --body "Add abs(n: number): number. Add test."
+
+gh issue create --title "Add repeat function to utils.ts" \
+  --body "Add repeat(s: string, n: number): string. Add test."
+
+pait orchestrate
+
+# Merge the first one to advance main
+
+pait finalize --single
+
+# Now push a conflicting change to main so the second PR is stale
+
+git checkout main && git pull
+echo '// timestamp marker' >> src/math.ts
+git add src/math.ts && git commit -m "chore: add timestamp marker"
+git push
+
+# The remaining PR is now first-in-queue AND main has diverged.
+# It MUST rebase successfully (this is the regression scenario).
+
+pait finalize --single --auto-resolve
+
+# EXPECT: Rebase happens (not skipped), PR merges successfully
+# EXPECT: No "Conflicts detected" or it auto-resolves cleanly
+
+Phase 13: Resumability after partial failure
+
+# This tests that finalize state persists and skips already-merged PRs.
+
+# Create 3 issues
+
+gh issue create --title "Add floor function to math.ts" \
+  --body "Add floor(n: number): number. Add test."
+
+gh issue create --title "Add ceil function to math.ts" \
+  --body "Add ceil(n: number): number. Add test."
+
+gh issue create --title "Add round function to math.ts" \
+  --body "Add round(n: number): number. Add test."
+
+pait orchestrate
+
+# Merge only the first one
+
+pait finalize --single
+
+# Simulate failure: break the tests so the next PR fails verification
+
+echo 'test("fail", () => expect(1).toBe(2));' >> src/math.test.ts
+git add src/math.test.ts && git commit -m "break tests" && git push
+
+pait finalize --single
+
+# EXPECT: Merge succeeds but post-merge verify FAILS
+
+# Fix the tests
+
+git checkout main && git pull
+git checkout HEAD~1 -- src/math.test.ts
+git add src/math.test.ts && git commit -m "fix tests" && git push
+
+# Re-run finalize — should skip already-merged PRs and continue
+
+pait finalize
+
+# EXPECT: Skips already-merged PRs, merges remaining PR(s)
+# EXPECT: Verify passes on the resumed run
+
+Phase 14: Test --no-verify flag
+
+# Create an issue for testing --no-verify
+
+gh issue create --title "Add sign function to math.ts" \
+  --body "Add sign(n: number): -1 | 0 | 1. Add test."
+
+pait orchestrate --single
+
+# Break tests deliberately
+
+echo 'test("fail", () => expect(1).toBe(2));' >> src/math.test.ts
+git add src/math.test.ts && git commit -m "break tests for no-verify test"
+git push
+
+# Without --no-verify: finalize should fail at verification
+
+pait finalize --single
+
+# EXPECT: Merge completes but post-merge verify FAILS
+
+# Restore tests and create another issue to test --no-verify
+
+git checkout main && git pull
+git checkout HEAD~1 -- src/math.test.ts
+git add src/math.test.ts && git commit -m "fix tests" && git push
+
+gh issue create --title "Add clamp function to math.ts" \
+  --body "Add clamp(n, min, max): number. Add test."
+
+pait orchestrate --single
+
+# Now break tests again
+
+echo 'test("fail", () => expect(1).toBe(2));' >> src/math.test.ts
+git add src/math.test.ts && git commit -m "break tests again"
+git push
+
+# With --no-verify: finalize should skip verification entirely
+
+pait finalize --single --no-verify
+
+# EXPECT: Merge completes, NO verification step runs
+# EXPECT: No "Verification failed" output — verification was skipped
+
+# Clean up: restore tests
+
+git checkout main && git pull
+git checkout HEAD~1 -- src/math.test.ts
+git add src/math.test.ts && git commit -m "restore tests" && git push
+
+Phase 8: Verify idempotency and state file
 
 pait finalize
 
@@ -349,4 +493,12 @@ pait finalize
 
 pait verify
 
-# EXPECT: All steps pass on final merged master
+# EXPECT: All steps pass on final merged main
+
+# Inspect finalize state file
+
+cat .pait/state/finalize.json | jq .
+
+# EXPECT: JSON with version, startedAt, completedAt fields
+# EXPECT: prs object with entries for each merged PR
+# EXPECT: Each PR entry has status: "merged", mergedAt timestamp, error: null

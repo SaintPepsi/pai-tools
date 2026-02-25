@@ -7,12 +7,13 @@
  */
 
 import { $ } from 'bun';
-import { readFileSync, writeFileSync, unlinkSync, existsSync, rmSync } from 'node:fs';
+import { unlinkSync, existsSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { log, Spinner } from '../../shared/log.ts';
 import { runClaude } from '../../shared/claude.ts';
 import { RunLogger } from '../../shared/logging.ts';
 import { findRepoRoot, loadToolConfig, saveToolConfig, getStateFilePath, migrateStateIfNeeded } from '../../shared/config.ts';
+import { loadState, saveState } from '../../shared/state.ts';
 import { ORCHESTRATOR_DEFAULTS } from './defaults.ts';
 import { runVerify, promptForVerifyCommands } from '../verify/index.ts';
 import type {
@@ -69,20 +70,7 @@ export function parseFlags(args: string[]): OrchestratorFlags {
 // State management
 // ---------------------------------------------------------------------------
 
-export function loadState(stateFile: string): OrchestratorState | null {
-	try {
-		const content = readFileSync(stateFile, 'utf-8');
-		if (!content) return null;
-		return JSON.parse(content);
-	} catch {
-		return null;
-	}
-}
-
-export function saveState(state: OrchestratorState, stateFile: string): void {
-	state.updatedAt = new Date().toISOString();
-	writeFileSync(stateFile, JSON.stringify(state, null, 2));
-}
+export { loadState, saveState } from '../../shared/state.ts';
 
 export function initState(): OrchestratorState {
 	return {

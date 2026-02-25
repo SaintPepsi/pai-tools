@@ -12,6 +12,7 @@ import { log } from '../../shared/log.ts';
 import { promptLine } from '../../shared/prompt.ts';
 import { runClaude } from '../../shared/claude.ts';
 import { findRepoRoot, loadToolConfig, getStateFilePath } from '../../shared/config.ts';
+import { loadState, saveState } from '../../shared/state.ts';
 import { runVerify } from '../verify/index.ts';
 import type { VerifyCommand, E2EConfig } from '../verify/types.ts';
 import type {
@@ -58,18 +59,11 @@ export function parseFinalizeFlags(args: string[]): FinalizeFlags {
 // ---------------------------------------------------------------------------
 
 export function loadFinalizeState(stateFile: string): FinalizeState | null {
-	try {
-		const content = readFileSync(stateFile, 'utf-8');
-		if (!content) return null;
-		return JSON.parse(content);
-	} catch {
-		return null;
-	}
+	return loadState<FinalizeState>(stateFile);
 }
 
 export function saveFinalizeState(state: FinalizeState, stateFile: string): void {
-	state.updatedAt = new Date().toISOString();
-	writeFileSync(stateFile, JSON.stringify(state, null, 2));
+	saveState(state, stateFile);
 }
 
 export function initFinalizeState(): FinalizeState {

@@ -15,7 +15,7 @@ import { loadState } from '../../shared/state.ts';
 import { fetchOpenIssues } from '../../shared/github.ts';
 import { buildGraph, topologicalSort } from './dependency-graph.ts';
 import { printExecutionPlan, printStatus } from './display.ts';
-import { promptForVerifyCommands } from '../verify/index.ts';
+import { promptForVerifyCommands } from './prompt.ts';
 import { runDryRun } from './dry-run.ts';
 import { runMainLoop } from './execution.ts';
 import { initState } from './state-helpers.ts';

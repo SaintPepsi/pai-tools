@@ -39,10 +39,10 @@ export function parseFinalizeFlags(args: string[]): FinalizeFlags {
 		: null;
 
 	const stratIdx = args.indexOf('--strategy');
-	const rawStrategy = stratIdx !== -1 && args[stratIdx + 1] ? args[stratIdx + 1] : 'squash';
+	const rawStrategy = stratIdx !== -1 && args[stratIdx + 1] ? args[stratIdx + 1] : 'merge';
 	const strategy = (['squash', 'merge', 'rebase'].includes(rawStrategy)
 		? rawStrategy
-		: 'squash') as MergeStrategy;
+		: 'merge') as MergeStrategy;
 
 	return {
 		dryRun: args.includes('--dry-run'),
@@ -119,7 +119,7 @@ const FINALIZE_HELP = `\x1b[36mpait finalize\x1b[0m — Merge orchestrated PRs
   --dry-run           Show merge plan without acting
   --single            Merge only the next PR, then stop
   --no-verify         Skip post-merge verification
-  --strategy <type>   Merge strategy: squash (default) | merge | rebase
+  --strategy <type>   Merge strategy: merge (default) | squash | rebase
   --from <N>          Start from issue #N
   --auto-resolve      Resolve conflicts via Claude (non-interactive)
   --help, -h          Show this help message

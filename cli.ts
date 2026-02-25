@@ -77,7 +77,7 @@ const HELP = `\x1b[36mpait\x1b[0m — PAI Tools CLI
   --dry-run           Show merge plan without acting
   --single            Merge only the next PR, then stop
   --no-verify         Skip post-merge verification
-  --strategy <type>   Merge strategy: squash (default) | merge | rebase
+  --strategy <type>   Merge strategy: merge (default) | squash | rebase
   --from <N>          Start from issue #N
   --auto-resolve      Resolve conflicts via Claude (non-interactive)
 

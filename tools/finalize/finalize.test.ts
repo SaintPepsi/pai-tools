@@ -33,9 +33,9 @@ describe('parseFinalizeFlags', () => {
 		expect(flags.strategy).toBe('rebase');
 	});
 
-	test('defaults strategy to squash for invalid value', () => {
+	test('defaults strategy to merge for invalid value', () => {
 		const flags = parseFinalizeFlags(['--strategy', 'invalid']);
-		expect(flags.strategy).toBe('squash');
+		expect(flags.strategy).toBe('merge');
 	});
 
 	test('parses --from N', () => {
@@ -48,12 +48,12 @@ describe('parseFinalizeFlags', () => {
 		expect(flags.help).toBe(true);
 	});
 
-	test('defaults to all false/null/squash', () => {
+	test('defaults to all false/null/merge', () => {
 		const flags = parseFinalizeFlags([]);
 		expect(flags.dryRun).toBe(false);
 		expect(flags.single).toBe(false);
 		expect(flags.noVerify).toBe(false);
-		expect(flags.strategy).toBe('squash');
+		expect(flags.strategy).toBe('merge');
 		expect(flags.from).toBeNull();
 		expect(flags.help).toBe(false);
 	});

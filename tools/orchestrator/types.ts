@@ -4,13 +4,8 @@
 
 import type { VerifyCommand, E2EConfig } from '../verify/types.ts';
 
-export interface GitHubIssue {
-	number: number;
-	title: string;
-	body: string;
-	state: string;
-	labels: { name: string }[];
-}
+// Re-exported from shared for backward compatibility
+export type { GitHubIssue } from '../../shared/github.ts';
 
 export interface DependencyNode {
 	issue: GitHubIssue;

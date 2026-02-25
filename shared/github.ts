@@ -123,6 +123,49 @@ export async function createPR(
 	}
 }
 
+export function determineMergeOrder(prs: MergeOrder[]): MergeOrder[] {
+	// Build a map of branch -> PR for dependency resolution
+	const branchMap = new Map<string, MergeOrder>();
+	for (const pr of prs) {
+		branchMap.set(pr.branch, pr);
+	}
+
+	// Stacked: if PR A's baseBranch is PR B's branch, B goes first.
+	// inStack tracks the current recursion path to detect cycles.
+	const visited = new Set<string>();
+	const inStack = new Set<string>();
+	const result: MergeOrder[] = [];
+
+	function visit(pr: MergeOrder): void {
+		if (visited.has(pr.branch)) return;
+		if (inStack.has(pr.branch)) {
+			throw new Error(
+				`Cycle detected in PR dependency graph: ${pr.branch} is part of a circular dependency`
+			);
+		}
+
+		inStack.add(pr.branch);
+
+		// If this PR's base is another PR in our set, visit that first
+		const dep = branchMap.get(pr.baseBranch);
+		if (dep) {
+			visit(dep);
+		}
+
+		inStack.delete(pr.branch);
+		visited.add(pr.branch);
+		result.push(pr);
+	}
+
+	// Sort by issue number for deterministic independent ordering
+	const sorted = [...prs].sort((a, b) => a.issueNumber - b.issueNumber);
+	for (const pr of sorted) {
+		visit(pr);
+	}
+
+	return result;
+}
+
 export async function discoverMergeablePRs(repoRoot: string): Promise<MergeOrder[]> {
 	const stateFile = getStateFilePath(repoRoot, 'orchestrator');
 	if (!existsSync(stateFile)) {

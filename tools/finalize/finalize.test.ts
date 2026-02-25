@@ -5,13 +5,13 @@ import { tmpdir } from 'node:os';
 import { $ } from 'bun';
 import {
 	parseFinalizeFlags,
-	determineMergeOrder,
 	loadFinalizeState,
 	saveFinalizeState,
 	initFinalizeState,
 	rebaseBranch,
 	detectConflicts
 } from './index.ts';
+import { determineMergeOrder } from '../../shared/github.ts';
 import type { MergeOrder, FinalizeState } from './types.ts';
 
 describe('parseFinalizeFlags', () => {
@@ -97,6 +97,16 @@ describe('determineMergeOrder', () => {
 		const idx1 = ordered.findIndex((p) => p.issueNumber === 1);
 		const idx2 = ordered.findIndex((p) => p.issueNumber === 2);
 		expect(idx1).toBeLessThan(idx2);
+	});
+
+	test('cycle in stacked PRs throws instead of silently dropping a PR', () => {
+		// A depends on B, B depends on A — a true circular dependency.
+		// The function must throw rather than silently lose one of the PRs.
+		const prs: MergeOrder[] = [
+			{ issueNumber: 1, prNumber: 10, branch: 'feat/1-a', baseBranch: 'feat/2-b' },
+			{ issueNumber: 2, prNumber: 20, branch: 'feat/2-b', baseBranch: 'feat/1-a' }
+		];
+		expect(() => determineMergeOrder(prs)).toThrow(/[Cc]ycle/);
 	});
 });
 

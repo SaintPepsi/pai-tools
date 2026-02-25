@@ -9,7 +9,7 @@ import { $ } from 'bun';
 import { log } from '../../shared/log.ts';
 import { findRepoRoot, loadToolConfig, getStateFilePath } from '../../shared/config.ts';
 import { loadState, saveState } from '../../shared/state.ts';
-import { discoverMergeablePRs, mergePR } from '../../shared/github.ts';
+import { discoverMergeablePRs, determineMergeOrder, mergePR } from '../../shared/github.ts';
 import { runVerify } from '../verify/index.ts';
 import type { VerifyCommand, E2EConfig } from '../verify/types.ts';
 import {
@@ -20,13 +20,13 @@ import type {
 	FinalizeFlags,
 	FinalizeState,
 	PRMergeState,
-	MergeOrder,
 	MergeStrategy
 } from './types.ts';
 
 // Re-export types and shared GitHub operations
-export type { FinalizeFlags, FinalizeState, PRMergeState, MergeOrder } from './types.ts';
-export { discoverMergeablePRs } from '../../shared/github.ts';
+export type { FinalizeFlags, FinalizeState, PRMergeState } from './types.ts';
+export type { MergeOrder } from '../../shared/github.ts';
+export { discoverMergeablePRs, determineMergeOrder } from '../../shared/github.ts';
 
 // ---------------------------------------------------------------------------
 // Flag parsing
@@ -75,51 +75,6 @@ export function initFinalizeState(): FinalizeState {
 		prs: {}
 	};
 }
-
-// ---------------------------------------------------------------------------
-// PR discovery (implementation in shared/github.ts)
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Merge ordering
-// ---------------------------------------------------------------------------
-
-export function determineMergeOrder(prs: MergeOrder[]): MergeOrder[] {
-	// Build a map of branch -> PR for dependency resolution
-	const branchMap = new Map<string, MergeOrder>();
-	for (const pr of prs) {
-		branchMap.set(pr.branch, pr);
-	}
-
-	// Stacked: if PR A's baseBranch is PR B's branch, B goes first
-	const visited = new Set<string>();
-	const result: MergeOrder[] = [];
-
-	function visit(pr: MergeOrder): void {
-		if (visited.has(pr.branch)) return;
-		visited.add(pr.branch);
-
-		// If this PR's base is another PR in our set, visit that first
-		const dep = branchMap.get(pr.baseBranch);
-		if (dep) {
-			visit(dep);
-		}
-
-		result.push(pr);
-	}
-
-	// Sort by issue number for deterministic independent ordering
-	const sorted = [...prs].sort((a, b) => a.issueNumber - b.issueNumber);
-	for (const pr of sorted) {
-		visit(pr);
-	}
-
-	return result;
-}
-
-// ---------------------------------------------------------------------------
-// PR merge (implementation in shared/github.ts)
-// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // Post-merge verification

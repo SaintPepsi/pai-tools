@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 describe('CLI help text sync', () => {
@@ -125,4 +125,42 @@ describe('CLI help text sync', () => {
 			);
 		}
 	});
+});
+
+describe('Tool README flag sync', () => {
+	function extractFlags(source: string, fnName: string): string[] {
+		const match = source.match(new RegExp(`function ${fnName}[\\s\\S]*?^}`, 'm'));
+		if (!match) return [];
+		return [...match[0].matchAll(/'(--[\w-]+)'/g)]
+			.map((m) => m[1])
+			.filter((f) => f !== '--help');
+	}
+
+	const tools = [
+		{ name: 'orchestrator', fn: 'parseFlags', dir: 'tools/orchestrator' },
+		{ name: 'analyze', fn: 'parseAnalyzeFlags', dir: 'tools/analyze' },
+		{ name: 'verify', fn: 'parseVerifyFlags', dir: 'tools/verify' },
+		{ name: 'finalize', fn: 'parseFinalizeFlags', dir: 'tools/finalize' }
+	];
+
+	for (const tool of tools) {
+		const readmePath = join(import.meta.dir, tool.dir, 'README.md');
+		if (!existsSync(readmePath)) continue;
+
+		test(`every ${tool.name} flag appears in ${tool.dir}/README.md`, () => {
+			const toolSource = readFileSync(join(import.meta.dir, tool.dir, 'index.ts'), 'utf-8');
+			const flags = extractFlags(toolSource, tool.fn);
+			const toolReadme = readFileSync(readmePath, 'utf-8');
+
+			expect(flags.length).toBeGreaterThan(0);
+
+			const missing = flags.filter((flag) => !toolReadme.includes(flag));
+			if (missing.length > 0) {
+				throw new Error(
+					`${tool.name} flags missing from ${tool.dir}/README.md: ${missing.join(', ')}\n` +
+						`Update ${tool.dir}/README.md to include these flags.`
+				);
+			}
+		});
+	}
 });

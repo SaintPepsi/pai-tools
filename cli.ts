@@ -78,6 +78,7 @@ const HELP = `\x1b[36mpait\x1b[0m — PAI Tools CLI
   --no-verify         Skip post-merge verification
   --strategy <type>   Merge strategy: squash (default) | merge | rebase
   --from <N>          Start from issue #N
+  --auto-resolve      Resolve conflicts via Claude (non-interactive)
 
 \x1b[90mhttps://github.com/SaintPepsi/pai-tools\x1b[0m
 `;

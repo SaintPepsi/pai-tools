@@ -205,8 +205,29 @@ describe('git operations', () => {
 		expect(result.conflicts![0].file).toBe('README.md');
 	});
 
+	test('rebaseBranch: no-op when branch already up-to-date', async () => {
+		// Feature branch created from current main tip — no divergence
+		await $`git -C ${repoRoot} checkout -b feat/3-uptodate`.quiet();
+		writeFileSync(join(repoRoot, 'feature.txt'), 'feature\n');
+		await $`git -C ${repoRoot} add feature.txt`.quiet();
+		await $`git -C ${repoRoot} commit -m "add feature"`.quiet();
+
+		const result = await rebaseBranch('feat/3-uptodate', 'main', repoRoot);
+		expect(result.ok).toBe(true);
+		expect(result.conflicts).toBeUndefined();
+	});
+
 	test('detectConflicts: returns empty when no conflicts', async () => {
 		const conflicts = await detectConflicts(repoRoot);
 		expect(conflicts).toEqual([]);
+	});
+});
+
+describe('finalize loop rebase guard', () => {
+	test('no startIdx guard — all PRs get rebased (regression)', () => {
+		// Regression: `if (i > startIdx)` skipped rebase for first PR,
+		// causing merge failures when main diverged after earlier merges.
+		const source = readFileSync(join(import.meta.dir, 'index.ts'), 'utf-8');
+		expect(source).not.toContain('i > startIdx');
 	});
 });

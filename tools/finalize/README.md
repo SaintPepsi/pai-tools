@@ -17,6 +17,7 @@ pait finalize [flags]
 | `--no-verify` | Skip post-merge verification |
 | `--strategy <type>` | Merge strategy: `squash` (default), `merge`, `rebase` |
 | `--from <N>` | Start from issue #N |
+| `--auto-resolve` | Resolve conflicts via Claude (non-interactive) |
 | `--help`, `-h` | Show help message |
 
 ## How It Works
@@ -39,6 +40,14 @@ When a rebase produces conflicts, finalize prompts for each file:
 - `theirs` — keep the feature branch version
 - Any other text — treated as intent, passed to Claude for AI-assisted resolution
 
+### Auto-resolve (`--auto-resolve`)
+
+When `--auto-resolve` is set, conflicts are resolved non-interactively by sending each conflicted file to Claude. Claude merges both sides, preferring the incoming (feature branch) changes when incompatible. This is designed for agent-driven workflows where no human is available to answer prompts.
+
+```bash
+pait finalize --auto-resolve
+```
+
 ## Examples
 
 ```bash
@@ -50,4 +59,7 @@ pait finalize --single
 
 # Skip verification, use merge commits
 pait finalize --no-verify --strategy merge
+
+# Auto-resolve conflicts (non-interactive, for agent workflows)
+pait finalize --auto-resolve
 ```

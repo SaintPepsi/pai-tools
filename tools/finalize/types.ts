@@ -12,6 +12,7 @@ export interface FinalizeFlags {
 	noVerify: boolean;
 	strategy: MergeStrategy;
 	from: number | null;
+	autoResolve: boolean;
 	help: boolean;
 }
 

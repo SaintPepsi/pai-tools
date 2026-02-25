@@ -47,6 +47,7 @@ export function parseFinalizeFlags(args: string[]): FinalizeFlags {
 		noVerify: args.includes('--no-verify'),
 		strategy,
 		from,
+		autoResolve: args.includes('--auto-resolve'),
 		help: args.includes('--help') || args.includes('-h')
 	};
 }
@@ -295,6 +296,49 @@ Output ONLY the resolved file content. No explanation, no code fences, just the 
 	}
 }
 
+export async function autoResolveConflicts(
+	conflicts: ConflictInfo[],
+	repoRoot: string
+): Promise<boolean> {
+	for (const c of conflicts) {
+		const conflictContent = readFileSync(`${repoRoot}/${c.file}`, 'utf-8');
+		const prompt = `You are resolving a git merge conflict in the file "${c.file}".
+
+Resolve this conflict by keeping both changes where possible. If the changes are incompatible, prefer the incoming (feature branch) version marked with >>>>>>> but integrate any non-conflicting parts from the current branch marked with <<<<<<<.
+
+Here is the file with conflict markers:
+
+${conflictContent}
+
+Output ONLY the resolved file content. No explanation, no code fences, just the file content.`;
+
+		const result = await runClaude({
+			prompt,
+			model: 'sonnet',
+			cwd: repoRoot
+		});
+
+		if (result.ok && result.output.trim()) {
+			writeFileSync(`${repoRoot}/${c.file}`, result.output);
+			await $`git -C ${repoRoot} add ${c.file}`.quiet();
+			log.ok(`Auto-resolved: ${c.file}`);
+		} else {
+			log.error(`Failed to auto-resolve ${c.file}`);
+			return false;
+		}
+	}
+
+	// Continue rebase
+	try {
+		await $`git -C ${repoRoot} rebase --continue`.quiet();
+		return true;
+	} catch {
+		log.error('Rebase continue failed after auto-resolution');
+		await $`git -C ${repoRoot} rebase --abort`.quiet().catch(() => {});
+		return false;
+	}
+}
+
 // ---------------------------------------------------------------------------
 // PR merge
 // ---------------------------------------------------------------------------
@@ -371,6 +415,7 @@ const FINALIZE_HELP = `\x1b[36mpait finalize\x1b[0m — Merge orchestrated PRs
   --no-verify         Skip post-merge verification
   --strategy <type>   Merge strategy: squash (default) | merge | rebase
   --from <N>          Start from issue #N
+  --auto-resolve      Resolve conflicts via Claude (non-interactive)
   --help, -h          Show this help message
 
 Discovers completed orchestrated PRs and merges them in dependency order.
@@ -453,35 +498,39 @@ export async function finalize(flags: FinalizeFlags): Promise<void> {
 
 		const prState = state.prs[pr.prNumber];
 
-		// Rebase if needed (for stacked PRs after a squash merge)
-		if (i > startIdx) {
-			log.info(`Rebasing ${pr.branch} onto ${baseBranch}...`);
-			const rebaseResult = await rebaseBranch(pr.branch, baseBranch, repoRoot);
+		// Rebase onto target (handles stale branches, stacked PRs, and conflicts)
+		log.info(`Rebasing ${pr.branch} onto ${baseBranch}...`);
+		const rebaseResult = await rebaseBranch(pr.branch, baseBranch, repoRoot);
 
-			if (!rebaseResult.ok) {
-				if (rebaseResult.conflicts && rebaseResult.conflicts.length > 0) {
-					log.warn('Conflicts detected during rebase');
-					const intents = await presentConflicts(rebaseResult.conflicts);
-					const resolved = await resolveConflicts(rebaseResult.conflicts, intents, repoRoot);
-					if (!resolved) {
-						prState.status = 'conflict';
-						prState.error = 'Conflict resolution failed';
-						saveFinalizeState(state, stateFile);
-						log.error(`Failed to resolve conflicts for PR #${pr.prNumber}`);
-						continue;
-					}
+		if (!rebaseResult.ok) {
+			if (rebaseResult.conflicts && rebaseResult.conflicts.length > 0) {
+				log.warn('Conflicts detected during rebase');
+				let resolved: boolean;
+				if (flags.autoResolve) {
+					log.info('Auto-resolving conflicts via Claude...');
+					resolved = await autoResolveConflicts(rebaseResult.conflicts, repoRoot);
 				} else {
-					prState.status = 'failed';
-					prState.error = 'Rebase failed (not a conflict)';
+					const intents = await presentConflicts(rebaseResult.conflicts);
+					resolved = await resolveConflicts(rebaseResult.conflicts, intents, repoRoot);
+				}
+				if (!resolved) {
+					prState.status = 'conflict';
+					prState.error = 'Conflict resolution failed';
 					saveFinalizeState(state, stateFile);
-					log.error(`Rebase failed for PR #${pr.prNumber}`);
+					log.error(`Failed to resolve conflicts for PR #${pr.prNumber}`);
 					continue;
 				}
+			} else {
+				prState.status = 'failed';
+				prState.error = 'Rebase failed (not a conflict)';
+				saveFinalizeState(state, stateFile);
+				log.error(`Rebase failed for PR #${pr.prNumber}`);
+				continue;
 			}
-
-			// Push rebased branch (always — remote must match local after rebase)
-			await $`git -C ${repoRoot} push --force-with-lease origin ${pr.branch}`.quiet().catch(() => {});
 		}
+
+		// Push rebased branch (always — remote must match local after rebase)
+		await $`git -C ${repoRoot} push --force-with-lease origin ${pr.branch}`.quiet().catch(() => {});
 
 		// Retarget dependent PRs before merge (prevents orphaning when branch is deleted)
 		for (const other of ordered) {

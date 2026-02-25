@@ -6,10 +6,10 @@
  */
 
 import { $ } from 'bun';
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { log } from '../../shared/log.ts';
 import { findRepoRoot, loadToolConfig, getStateFilePath } from '../../shared/config.ts';
 import { loadState, saveState } from '../../shared/state.ts';
+import { discoverMergeablePRs, mergePR } from '../../shared/github.ts';
 import { runVerify } from '../verify/index.ts';
 import type { VerifyCommand, E2EConfig } from '../verify/types.ts';
 import {
@@ -24,8 +24,9 @@ import type {
 	MergeStrategy
 } from './types.ts';
 
-// Re-export types
+// Re-export types and shared GitHub operations
 export type { FinalizeFlags, FinalizeState, PRMergeState, MergeOrder } from './types.ts';
+export { discoverMergeablePRs } from '../../shared/github.ts';
 
 // ---------------------------------------------------------------------------
 // Flag parsing
@@ -76,60 +77,8 @@ export function initFinalizeState(): FinalizeState {
 }
 
 // ---------------------------------------------------------------------------
-// Orchestrator state reading
+// PR discovery (implementation in shared/github.ts)
 // ---------------------------------------------------------------------------
-
-interface OrchestratorIssueState {
-	number: number;
-	title: string | null;
-	status: string;
-	branch: string | null;
-	baseBranch: string | null;
-	prNumber: number | null;
-}
-
-interface OrchestratorState {
-	issues: Record<number, OrchestratorIssueState>;
-}
-
-// ---------------------------------------------------------------------------
-// PR discovery
-// ---------------------------------------------------------------------------
-
-export async function discoverMergeablePRs(repoRoot: string): Promise<MergeOrder[]> {
-	const stateFile = getStateFilePath(repoRoot, 'orchestrator');
-	if (!existsSync(stateFile)) {
-		log.error('No orchestrator state found. Run `pait orchestrate` first.');
-		return [];
-	}
-
-	const raw = readFileSync(stateFile, 'utf-8');
-	const state: OrchestratorState = JSON.parse(raw);
-
-	const prs: MergeOrder[] = [];
-	for (const issue of Object.values(state.issues)) {
-		if (issue.status !== 'completed' || !issue.prNumber || !issue.branch) continue;
-
-		// Check if PR is still open
-		try {
-			const prState = (
-				await $`gh pr view ${issue.prNumber} --json state --jq .state`.text()
-			).trim();
-			if (prState !== 'OPEN') continue;
-		} catch {
-			continue;
-		}
-
-		prs.push({
-			issueNumber: issue.number,
-			prNumber: issue.prNumber,
-			branch: issue.branch,
-			baseBranch: issue.baseBranch ?? 'master'
-		});
-	}
-
-	return prs;
-}
 
 // ---------------------------------------------------------------------------
 // Merge ordering
@@ -169,35 +118,8 @@ export function determineMergeOrder(prs: MergeOrder[]): MergeOrder[] {
 }
 
 // ---------------------------------------------------------------------------
-// PR merge
+// PR merge (implementation in shared/github.ts)
 // ---------------------------------------------------------------------------
-
-async function mergePR(
-	prNumber: number,
-	strategy: MergeStrategy,
-	dryRun: boolean
-): Promise<{ ok: boolean; error?: string }> {
-	if (dryRun) {
-		log.info(`[DRY RUN] Would merge PR #${prNumber} with --${strategy}`);
-		return { ok: true };
-	}
-
-	// Retry once — GitHub may need a moment to process a force-push before merge
-	for (let attempt = 0; attempt < 2; attempt++) {
-		try {
-			await $`gh pr merge ${prNumber} --${strategy} --delete-branch`.quiet();
-			return { ok: true };
-		} catch (err) {
-			if (attempt === 0) {
-				log.info('Merge failed, retrying in 3s (GitHub may still be processing)...');
-				await Bun.sleep(3000);
-			} else {
-				return { ok: false, error: String(err) };
-			}
-		}
-	}
-	return { ok: false, error: 'Unreachable' };
-}
 
 // ---------------------------------------------------------------------------
 // Post-merge verification

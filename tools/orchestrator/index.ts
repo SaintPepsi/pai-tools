@@ -16,6 +16,7 @@ import { findRepoRoot, loadToolConfig, saveToolConfig, getStateFilePath, migrate
 import { loadState, saveState } from '../../shared/state.ts';
 import { localBranchExists, deleteLocalBranch, createWorktree, removeWorktree } from '../../shared/git.ts';
 export { localBranchExists, deleteLocalBranch, createWorktree, removeWorktree } from '../../shared/git.ts';
+import { fetchOpenIssues, createSubIssues, createPR } from '../../shared/github.ts';
 import { ORCHESTRATOR_DEFAULTS } from './defaults.ts';
 import { runVerify, promptForVerifyCommands } from '../verify/index.ts';
 import type {
@@ -103,32 +104,8 @@ export function getIssueState(state: OrchestratorState, num: number, title?: str
 }
 
 // ---------------------------------------------------------------------------
-// GitHub helpers
+// GitHub helpers (implementation in shared/github.ts)
 // ---------------------------------------------------------------------------
-
-async function fetchOpenIssues(config: OrchestratorConfig): Promise<GitHubIssue[]> {
-	const authors = config.allowedAuthors?.length
-		? config.allowedAuthors
-		: [(await $`gh api user --jq .login`.text()).trim()];
-
-	log.info(`Filtering issues by author(s): ${authors.join(', ')}`);
-
-	const seen = new Set<number>();
-	const issues: GitHubIssue[] = [];
-
-	for (const author of authors) {
-		const result =
-			await $`gh issue list --state open --limit 200 --author ${author} --json number,title,body,state,labels`.text();
-		for (const issue of JSON.parse(result) as GitHubIssue[]) {
-			if (!seen.has(issue.number)) {
-				seen.add(issue.number);
-				issues.push(issue);
-			}
-		}
-	}
-
-	return issues;
-}
 
 export function parseDependencies(body: string): number[] {
 	const depLine = body.split('\n').find((line) => /depends\s+on/i.test(line));
@@ -270,41 +247,6 @@ Be conservative — only split if it's genuinely too large. Most issues with cle
 	}
 }
 
-async function createSubIssues(
-	parentIssue: GitHubIssue,
-	splits: { title: string; body: string }[],
-	parentDeps: number[]
-): Promise<number[]> {
-	const createdNumbers: number[] = [];
-	let previousSubIssue: number | null = null;
-
-	for (const split of splits) {
-		const deps: number[] =
-			previousSubIssue !== null
-				? [previousSubIssue]
-				: parentDeps.filter((d: number) => d !== parentIssue.number);
-
-		const depsLine: string =
-			deps.length > 0 ? `> **Depends on:** ${deps.map((d: number) => `#${d}`).join(', ')}\n\n` : '';
-
-		const issueBody: string = `${depsLine}> **Part of** #${parentIssue.number}\n\n${split.body}`;
-		const title: string = split.title;
-
-		const result: string = (
-			await $`gh issue create --title ${title} --body ${issueBody}`.text()
-		).trim();
-		const match: RegExpMatchArray | null = result.match(/(\d+)$/);
-		if (match) {
-			const num: number = Number(match[1]);
-			createdNumbers.push(num);
-			previousSubIssue = num;
-			log.ok(`Created sub-issue #${num}: ${title}`);
-		}
-	}
-
-	return createdNumbers;
-}
-
 // ---------------------------------------------------------------------------
 // Implementation via Claude agent
 // ---------------------------------------------------------------------------
@@ -384,33 +326,22 @@ async function implementIssue(
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// PR creation
+// PR body builder
 // ---------------------------------------------------------------------------
 
-async function createPR(
+function buildPRBody(
 	issue: GitHubIssue,
-	branchName: string,
-	baseBranch: string,
 	config: OrchestratorConfig,
-	flags: OrchestratorFlags,
-	worktreePath: string,
-	logger: RunLogger
-): Promise<{ ok: boolean; prNumber?: number; error?: string }> {
-	try {
-		await $`git -C ${worktreePath} push -u origin ${branchName}`.quiet();
-	} catch (err) {
-		return { ok: false, error: `Failed to push branch: ${err}` };
-	}
+	flags: OrchestratorFlags
+): string {
+	const verifyChecklist = config.verify
+		.map((v) => `- [x] \`${v.cmd}\` passes`)
+		.join('\n');
+	const e2eLine = config.e2e
+		? (flags.skipE2e ? '- [ ] E2E (skipped)' : `- [x] \`${config.e2e.run}\` passes`)
+		: '';
 
-	try {
-		const verifyChecklist = config.verify
-			.map((v) => `- [x] \`${v.cmd}\` passes`)
-			.join('\n');
-		const e2eLine = config.e2e
-			? (flags.skipE2e ? '- [ ] E2E (skipped)' : `- [x] \`${config.e2e.run}\` passes`)
-			: '';
-
-		const prBody = `## Summary
+	return `## Summary
 
 Closes #${issue.number}
 
@@ -425,17 +356,6 @@ ${e2eLine}
 
 ---
 Automated by pai orchestrate`;
-
-		const result =
-			await $`gh pr create --title ${issue.title} --body ${prBody} --base ${baseBranch} --head ${branchName}`.text();
-		const match = result.match(/(\d+)/);
-		const prNumber = match ? Number(match[1]) : undefined;
-		log.ok(`PR created: ${result.trim()}`);
-		if (prNumber) logger.prCreated(issue.number, prNumber);
-		return { ok: true, prNumber };
-	} catch (err) {
-		return { ok: false, error: `Failed to create PR: ${err}` };
-	}
 }
 
 // ---------------------------------------------------------------------------
@@ -692,7 +612,7 @@ async function runMainLoop(
 				log.ok(`Split into: ${subIssueNumbers.map((n) => `#${n}`).join(', ')}`);
 				log.info('Re-fetching issues and rebuilding graph...');
 
-				const freshIssues = await fetchOpenIssues(config);
+				const freshIssues = await fetchOpenIssues(config.allowedAuthors);
 				const freshGraph = buildGraph(freshIssues, config);
 				const freshOrder = topologicalSort(freshGraph);
 
@@ -845,7 +765,8 @@ Commit your fixes referencing #${issueNum}.`;
 
 		// Create PR (push from worktree)
 		log.info('Creating pull request...');
-		const prResult = await createPR(node.issue, node.branch, baseBranch, config, flags, worktreePath, logger);
+		const prBody = buildPRBody(node.issue, config, flags);
+		const prResult = await createPR(node.issue.title, prBody, baseBranch, node.branch, worktreePath);
 		if (!prResult.ok) {
 			log.error(prResult.error ?? 'PR creation failed');
 			issueState.status = 'failed';
@@ -855,6 +776,7 @@ Commit your fixes referencing #${issueNum}.`;
 			await removeWorktree(worktreePath, node.branch, repoRoot, logger, issueNum);
 			process.exit(1);
 		}
+		if (prResult.prNumber) logger.prCreated(issueNum, prResult.prNumber);
 
 		// Clean up worktree (branch stays for the PR)
 		await removeWorktree(worktreePath, node.branch, repoRoot, logger, issueNum);
@@ -940,7 +862,7 @@ export async function orchestrate(flags: OrchestratorFlags): Promise<void> {
 
 	// Fetch issues and build graph
 	log.step('FETCHING ISSUES');
-	const issues = await fetchOpenIssues(config);
+	const issues = await fetchOpenIssues(config.allowedAuthors);
 	log.ok(`Fetched ${issues.length} open issues`);
 
 	const graph = buildGraph(issues, config);

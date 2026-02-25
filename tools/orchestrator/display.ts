@@ -7,7 +7,7 @@
 import { log } from '../../shared/log.ts';
 import type { DependencyNode, OrchestratorState } from './types.ts';
 
-export function printExecutionPlan(order: number[], graph: Map<number, DependencyNode>): void {
+export function printExecutionPlan(order: number[], graph: Map<number, DependencyNode>, baseBranch = 'master'): void {
 	log.step('EXECUTION PLAN');
 	for (let i = 0; i < order.length; i++) {
 		const num = order[i];
@@ -17,7 +17,7 @@ export function printExecutionPlan(order: number[], graph: Map<number, Dependenc
 		const deps =
 			node.dependsOn.length > 0
 				? ` (deps: ${node.dependsOn.map((d) => `#${d}`).join(', ')})`
-				: ' (no deps — branches from master)';
+				: ` (no deps — branches from ${baseBranch})`;
 		console.log(`  ${(i + 1).toString().padStart(2)}. #${num} ${node.issue.title}${deps}`);
 		log.dim(`      → branch: ${node.branch}`);
 	}

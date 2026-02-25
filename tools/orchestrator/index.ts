@@ -8,8 +8,7 @@
 
 import { unlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { log, Spinner } from '../../shared/log.ts';
-import { runClaude } from '../../shared/claude.ts';
+import { log } from '../../shared/log.ts';
 import { RunLogger } from '../../shared/logging.ts';
 import { findRepoRoot, loadToolConfig, saveToolConfig, getStateFilePath, migrateStateIfNeeded } from '../../shared/config.ts';
 import { loadState, saveState } from '../../shared/state.ts';
@@ -20,8 +19,10 @@ import { ORCHESTRATOR_DEFAULTS } from './defaults.ts';
 import { runVerify, promptForVerifyCommands } from '../verify/index.ts';
 import { buildGraph, topologicalSort } from './dependency-graph.ts';
 export { parseDependencies, toKebabSlug, buildGraph, topologicalSort } from './dependency-graph.ts';
-import { assessIssueSize, implementIssue } from './agent-runner.ts';
+import { assessIssueSize, implementIssue, fixVerificationFailure } from './agent-runner.ts';
+export { assessIssueSize, buildImplementationPrompt, fixVerificationFailure, implementIssue } from './agent-runner.ts';
 import { printExecutionPlan, printStatus } from './display.ts';
+export { printExecutionPlan, printStatus } from './display.ts';
 import type {
 	GitHubIssue,
 	DependencyNode,
@@ -354,7 +355,7 @@ async function runMainLoop(
 				executionOrder.length = 0;
 				executionOrder.push(...freshOrder);
 
-				printExecutionPlan(executionOrder, graph);
+				printExecutionPlan(executionOrder, graph, config.baseBranch);
 
 				const firstSubIdx = executionOrder.findIndex((n) => subIssueNumbers.includes(n));
 				if (firstSubIdx !== -1) {
@@ -453,30 +454,14 @@ async function runMainLoop(
 				log.error(`Verification failed at ${verifyResult.failedStep}`);
 
 				if (attempt < config.retries.verify) {
-					const verifyList = config.verify.map((v) => `- ${v.cmd}`).join('\n');
-					const fixPrompt = `The verification step "${verifyResult.failedStep}" failed for issue #${issueNum}.
-
-Error output:
-${verifyResult.error}
-
-Please fix the issues and ensure all verification commands pass:
-${verifyList}
-
-Commit your fixes referencing #${issueNum}.`;
-
-					const fixSpinner = new Spinner();
-					fixSpinner.start(`Agent fixing verification for #${issueNum}`);
-
-					const fixResult = await runClaude({
-						prompt: fixPrompt,
-						model: config.models.implement,
-						cwd: worktreePath,
-						permissionMode: 'acceptEdits',
-						allowedTools: config.allowedTools
-					}).catch(() => ({ ok: false, output: '' }));
-
-					fixSpinner.stop();
-					logger.agentOutput(issueNum, fixResult.output);
+					await fixVerificationFailure(
+						issueNum,
+						verifyResult.failedStep,
+						verifyResult.error ?? '',
+						config,
+						worktreePath,
+						logger
+					);
 				} else {
 					issueState.status = 'failed';
 					issueState.error = `Verification failed at ${verifyResult.failedStep} after ${config.retries.verify + 1} attempts: ${verifyResult.error}`;
@@ -601,7 +586,7 @@ export async function orchestrate(flags: OrchestratorFlags): Promise<void> {
 	const graph = buildGraph(issues, config);
 	const executionOrder = topologicalSort(graph);
 
-	printExecutionPlan(executionOrder, graph);
+	printExecutionPlan(executionOrder, graph, config.baseBranch);
 
 	// Initialize run logger
 	const logger = new RunLogger(repoRoot);

@@ -230,7 +230,12 @@ Output ONLY the resolved file content. No explanation, no code fences, just the 
 			});
 
 			if (result.ok && result.output.trim()) {
-				writeFileSync(join(repoRoot, c.file), result.output);
+				const validated = validateResolvedContent(result.output, c.file);
+				if (!validated) {
+					log.error(`Resolution validation failed for ${c.file}`);
+					return false;
+				}
+				writeFileSync(join(repoRoot, c.file), validated);
 				await $`git -C ${repoRoot} add ${c.file}`.quiet();
 			} else {
 				log.error(`Failed to resolve ${c.file} via Claude`);
@@ -248,6 +253,45 @@ Output ONLY the resolved file content. No explanation, no code fences, just the 
 		await $`git -C ${repoRoot} rebase --abort`.quiet().catch(() => {});
 		return false;
 	}
+}
+
+/**
+ * Sanitize and validate Claude's conflict resolution output before writing.
+ * Returns the cleaned content, or null if the output is invalid.
+ */
+function validateResolvedContent(raw: string, filePath: string): string | null {
+	let content = raw;
+
+	// Strip markdown code fences if Claude wrapped the output
+	const fenceMatch = content.match(/^```[\w]*\n([\s\S]*?)\n```\s*$/);
+	if (fenceMatch) {
+		content = fenceMatch[1];
+	}
+
+	// Reject if conflict markers are still present (unresolved)
+	if (/^<{7}\s|^={7}$|^>{7}\s/m.test(content)) {
+		log.error(`Resolved content for ${filePath} still contains conflict markers`);
+		return null;
+	}
+
+	// For code files, reject output that is clearly prose explanation instead of code
+	const codeExtensions = ['.ts', '.tsx', '.js', '.jsx', '.json', '.css', '.html', '.sh', '.yaml', '.yml', '.toml'];
+	const isCodeFile = codeExtensions.some((ext) => filePath.endsWith(ext));
+
+	if (isCodeFile) {
+		const firstLine = content.trim().split('\n')[0].trim();
+		const prosePatterns = [
+			/^(The |Here |I |This |Let me |Below |Above |Note |Sure |Okay |Ok )/i,
+			/^(To resolve|The conflict|I've |I have |The resolved|The result)/i,
+			/^\*\*/  // markdown bold (e.g. **Conflict 1**)
+		];
+		if (prosePatterns.some((p) => p.test(firstLine))) {
+			log.error(`Resolved content for ${filePath} appears to be prose, not code: "${firstLine.slice(0, 60)}..."`);
+			return null;
+		}
+	}
+
+	return content;
 }
 
 export async function autoResolveConflicts(
@@ -272,14 +316,20 @@ Output ONLY the resolved file content. No explanation, no code fences, just the 
 			cwd: repoRoot
 		});
 
-		if (result.ok && result.output.trim()) {
-			writeFileSync(join(repoRoot, c.file), result.output);
-			await $`git -C ${repoRoot} add ${c.file}`.quiet();
-			log.ok(`Auto-resolved: ${c.file}`);
-		} else {
+		if (!result.ok || !result.output.trim()) {
 			log.error(`Failed to auto-resolve ${c.file}`);
 			return false;
 		}
+
+		const validated = validateResolvedContent(result.output, c.file);
+		if (!validated) {
+			log.error(`Auto-resolve validation failed for ${c.file} — aborting`);
+			return false;
+		}
+
+		writeFileSync(join(repoRoot, c.file), validated);
+		await $`git -C ${repoRoot} add ${c.file}`.quiet();
+		log.ok(`Auto-resolved: ${c.file}`);
 	}
 
 	// Continue rebase (GIT_EDITOR=true prevents editor from opening in non-interactive context)

@@ -170,15 +170,6 @@ export async function createGitHubIssue(
 	repoRoot: string,
 	dryRun: boolean,
 ): Promise<string | null> {
-	// Deduplication check: skip if an open issue already targets this file
-	if (issue.relativePath) {
-		const existingNumber = findExistingIssue(issue.relativePath, repoRoot);
-		if (existingNumber !== null) {
-			log.info(`Skipping ${issue.relativePath} — open issue #${existingNumber} already exists`);
-			return null;
-		}
-	}
-
 	// Build the full body, prepending dependency markers if needed
 	let body = issue.body;
 	if (issue.dependsOn && issue.dependsOn.length > 0) {
@@ -186,10 +177,21 @@ export async function createGitHubIssue(
 		body = `> **Depends on:** ${depList}\n\n${body}`;
 	}
 
+	// Dry-run guard: return early before any network calls (including dedup check).
 	if (dryRun) {
 		const depStr = issue.dependsOn?.length ? ` (depends on: ${issue.dependsOn.map(n => `#${n}`).join(', ')})` : '';
 		log.info(`[DRY RUN] Would create: ${issue.title}${depStr}`);
 		return null;
+	}
+
+	// Deduplication check: skip if an open issue already targets this file.
+	// Only runs outside dry-run to avoid unnecessary network calls during previews.
+	if (issue.relativePath) {
+		const existingNumber = findExistingIssue(issue.relativePath, repoRoot);
+		if (existingNumber !== null) {
+			log.info(`Skipping ${issue.relativePath} — open issue #${existingNumber} already exists`);
+			return null;
+		}
 	}
 
 	const labelArgs = issue.labels.flatMap(l => ['--label', l]);

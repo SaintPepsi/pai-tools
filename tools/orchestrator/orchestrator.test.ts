@@ -5,9 +5,10 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
 	createWorktree, removeWorktree, localBranchExists, deleteLocalBranch,
-	parseFlags, parseDependencies, toKebabSlug, buildGraph, topologicalSort,
+	parseFlags,
 	loadState, saveState, initState, getIssueState
 } from './index.ts';
+import { parseDependencies, toKebabSlug, buildGraph, topologicalSort } from './dependency-graph.ts';
 import { RunLogger } from '../../shared/logging.ts';
 import type { OrchestratorConfig, GitHubIssue } from './types.ts';
 

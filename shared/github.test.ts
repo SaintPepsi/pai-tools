@@ -47,34 +47,43 @@ describe('shared/github.ts exports', () => {
 // ---------------------------------------------------------------------------
 
 describe('orchestrator imports from shared/github.ts', () => {
-	const source = readFileSync(
+	const indexSource = readFileSync(
 		join(import.meta.dir, '../tools/orchestrator/index.ts'),
+		'utf-8'
+	);
+	const executionSource = readFileSync(
+		join(import.meta.dir, '../tools/orchestrator/execution.ts'),
 		'utf-8'
 	);
 
 	test('imports fetchOpenIssues from shared/github.ts', () => {
-		expect(source).toContain("from '../../shared/github.ts'");
-		expect(source).toContain('fetchOpenIssues');
+		expect(indexSource).toContain("from '../../shared/github.ts'");
+		expect(indexSource).toContain('fetchOpenIssues');
 	});
 
 	test('imports createSubIssues from shared/github.ts', () => {
-		expect(source).toContain('createSubIssues');
+		expect(executionSource).toContain("from '../../shared/github.ts'");
+		expect(executionSource).toContain('createSubIssues');
 	});
 
 	test('imports createPR from shared/github.ts', () => {
-		expect(source).toContain('createPR');
+		expect(executionSource).toContain("from '../../shared/github.ts'");
+		expect(executionSource).toContain('createPR');
 	});
 
 	test('does not define fetchOpenIssues locally', () => {
-		expect(source).not.toContain('async function fetchOpenIssues');
+		expect(indexSource).not.toContain('async function fetchOpenIssues');
+		expect(executionSource).not.toContain('async function fetchOpenIssues');
 	});
 
 	test('does not define createSubIssues locally', () => {
-		expect(source).not.toContain('async function createSubIssues');
+		expect(indexSource).not.toContain('async function createSubIssues');
+		expect(executionSource).not.toContain('async function createSubIssues');
 	});
 
 	test('does not define createPR locally', () => {
-		expect(source).not.toContain('async function createPR');
+		expect(indexSource).not.toContain('async function createPR');
+		expect(executionSource).not.toContain('async function createPR');
 	});
 });
 
@@ -112,27 +121,33 @@ describe('finalize imports from shared/github.ts', () => {
 
 describe('no duplicated gh CLI operations in tool-specific files', () => {
 	test('orchestrator has no gh issue list command', () => {
-		const source = readFileSync(
-			join(import.meta.dir, '../tools/orchestrator/index.ts'),
-			'utf-8'
-		);
-		expect(source).not.toContain('gh issue list');
+		for (const file of ['index.ts', 'execution.ts', 'dry-run.ts', 'state-helpers.ts']) {
+			const source = readFileSync(
+				join(import.meta.dir, `../tools/orchestrator/${file}`),
+				'utf-8'
+			);
+			expect(source).not.toContain('gh issue list');
+		}
 	});
 
 	test('orchestrator has no gh issue create command', () => {
-		const source = readFileSync(
-			join(import.meta.dir, '../tools/orchestrator/index.ts'),
-			'utf-8'
-		);
-		expect(source).not.toContain('gh issue create');
+		for (const file of ['index.ts', 'execution.ts', 'dry-run.ts', 'state-helpers.ts']) {
+			const source = readFileSync(
+				join(import.meta.dir, `../tools/orchestrator/${file}`),
+				'utf-8'
+			);
+			expect(source).not.toContain('gh issue create');
+		}
 	});
 
 	test('orchestrator has no gh pr create command', () => {
-		const source = readFileSync(
-			join(import.meta.dir, '../tools/orchestrator/index.ts'),
-			'utf-8'
-		);
-		expect(source).not.toContain('gh pr create');
+		for (const file of ['index.ts', 'execution.ts', 'dry-run.ts', 'state-helpers.ts']) {
+			const source = readFileSync(
+				join(import.meta.dir, `../tools/orchestrator/${file}`),
+				'utf-8'
+			);
+			expect(source).not.toContain('gh pr create');
+		}
 	});
 
 	test('finalize has no gh pr view command locally', () => {

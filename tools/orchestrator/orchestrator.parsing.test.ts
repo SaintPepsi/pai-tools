@@ -53,6 +53,12 @@ describe('parseFlags', () => {
 		const flags = parseFlags(['--from', '42']);
 		expect(flags.fromIssue).toBe(42);
 	});
+
+	// --from without a valid number calls process.exit(1) in production code,
+	// which terminates the process and cannot be caught by a unit test without
+	// mocking process.exit. The --single flag has a graceful fallback (returns
+	// null) so it can be unit-tested; --from does not. Covered by integration
+	// tests and the visible error message in the CLI.
 });
 
 // ---------------------------------------------------------------------------
@@ -117,6 +123,15 @@ describe('toKebabSlug', () => {
 	test('truncates to 50 characters', () => {
 		const longTitle = 'This is a very long issue title that exceeds the fifty character limit by quite a lot';
 		const slug = toKebabSlug(longTitle);
+		expect(slug.length).toBeLessThanOrEqual(50);
+		expect(slug).not.toMatch(/^-|-$/);
+	});
+
+	test('does not produce trailing hyphen when word boundary falls at character 50', () => {
+		// 'abcdefghij ' repeated produces a hyphen at position 50 before the fix
+		const title = 'abcdefghij abcdefghij abcdefghij abcdefghij abcde xyz';
+		const slug = toKebabSlug(title);
+		expect(slug).not.toMatch(/^-|-$/);
 		expect(slug.length).toBeLessThanOrEqual(50);
 	});
 

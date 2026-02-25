@@ -3,6 +3,9 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { loadState, saveState } from '../../shared/state.ts';
+// initState and getIssueState are defined in index.ts directly (not a sub-module),
+// so we import from there — consistent with orchestrator.parsing.test.ts which also
+// imports parseFlags from ./index.ts.
 import { initState, getIssueState } from './index.ts';
 import type { OrchestratorState } from './types.ts';
 
@@ -99,20 +102,25 @@ describe('state management', () => {
 		expect(loaded!.issues[99].error).toBeNull();
 	});
 
-	test('completed issue with stale error is a contract violation', () => {
+	test('stale error persists through save/load when not cleared', () => {
+		// Documents that the production code does NOT enforce the completed+error==null
+		// invariant automatically — callers are responsible for clearing error before
+		// setting status to completed. This is a regression guard: if a future refactor
+		// accidentally drops the null-assignment in the orchestrator loop, this test
+		// will still pass (the invariant is not enforced), but the companion test above
+		// will fail (the cleared state won't survive the roundtrip).
 		const state = initState();
-		const issue = getIssueState(state, 50, 'Should not have error when completed');
+		const issue = getIssueState(state, 50, 'Issue with stale error');
 
 		issue.status = 'completed';
 		issue.error = 'leftover error from failed attempt';
 
-		// This state is invalid — completed + non-null error should never happen
-		// The test documents the invariant: if status is completed, error must be null
-		expect(issue.status).toBe('completed');
-		expect(issue.error).not.toBeNull(); // This is the BAD state
+		// The invalid state round-trips as-is — no production code clears it.
+		const stateFile = join(tempDir, 'state.json');
+		saveState(state, stateFile);
+		const loaded = loadState<OrchestratorState>(stateFile);
 
-		// Correct it
-		issue.error = null;
-		expect(issue.error).toBeNull(); // This is the GOOD state
+		expect(loaded!.issues[50].status).toBe('completed');
+		expect(loaded!.issues[50].error).toBe('leftover error from failed attempt');
 	});
 });

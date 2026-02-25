@@ -20,8 +20,8 @@ export function toKebabSlug(title: string): string {
 		.toLowerCase()
 		.replace(/^\[\d+\]\s*/, '')
 		.replace(/[^a-z0-9]+/g, '-')
-		.replace(/^-|-$/g, '')
-		.slice(0, 50);
+		.slice(0, 50)
+		.replace(/^-|-$/g, '');
 }
 
 export function buildGraph(

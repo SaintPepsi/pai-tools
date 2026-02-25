@@ -14,6 +14,8 @@ import { runClaude } from '../../shared/claude.ts';
 import { RunLogger } from '../../shared/logging.ts';
 import { findRepoRoot, loadToolConfig, saveToolConfig, getStateFilePath, migrateStateIfNeeded } from '../../shared/config.ts';
 import { loadState, saveState } from '../../shared/state.ts';
+import { localBranchExists, deleteLocalBranch, createWorktree, removeWorktree } from '../../shared/git.ts';
+export { localBranchExists, deleteLocalBranch, createWorktree, removeWorktree } from '../../shared/git.ts';
 import { ORCHESTRATOR_DEFAULTS } from './defaults.ts';
 import { runVerify, promptForVerifyCommands } from '../verify/index.ts';
 import type {
@@ -301,108 +303,6 @@ async function createSubIssues(
 	}
 
 	return createdNumbers;
-}
-
-// ---------------------------------------------------------------------------
-// Worktree + branch management
-// ---------------------------------------------------------------------------
-
-export async function localBranchExists(name: string, repoRoot: string): Promise<boolean> {
-	try {
-		await $`git -C ${repoRoot} rev-parse --verify refs/heads/${name}`.quiet();
-		return true;
-	} catch {
-		return false;
-	}
-}
-
-export async function deleteLocalBranch(name: string, repoRoot: string): Promise<void> {
-	if (await localBranchExists(name, repoRoot)) {
-		await $`git -C ${repoRoot} branch -D ${name}`.quiet().catch(() => {});
-	}
-}
-
-export async function createWorktree(
-	branchName: string,
-	depBranches: string[],
-	config: OrchestratorConfig,
-	repoRoot: string,
-	logger: RunLogger,
-	issueNumber: number
-): Promise<{ ok: boolean; worktreePath: string; baseBranch: string; error?: string }> {
-	const worktreeDir = resolve(repoRoot, config.worktreeDir);
-	const slug = branchName.replace(/\//g, '-');
-	const worktreePath = join(worktreeDir, slug);
-
-	// Clean up any leftover worktree from a previous run
-	try {
-		await $`git -C ${repoRoot} worktree remove --force ${worktreePath}`.quiet();
-	} catch {
-		// Not an existing worktree — that's fine
-	}
-	if (existsSync(worktreePath)) {
-		rmSync(worktreePath, { recursive: true, force: true });
-	}
-
-	// Delete stale local branch if it exists
-	await deleteLocalBranch(branchName, repoRoot);
-
-	// Determine base branch from dependencies
-	const existingDeps: string[] = [];
-	for (const dep of depBranches) {
-		if (await localBranchExists(dep, repoRoot)) {
-			existingDeps.push(dep);
-		}
-	}
-	const baseBranch = existingDeps.length > 0 ? existingDeps[0] : config.baseBranch;
-
-	try {
-		// Create worktree with a new branch based on the chosen base
-		await $`git -C ${repoRoot} worktree add -b ${branchName} ${worktreePath} ${baseBranch}`.quiet();
-
-		logger.worktreeCreated(issueNumber, worktreePath, branchName);
-		logger.branchCreated(issueNumber, branchName, baseBranch);
-
-		// Merge additional dependency branches inside the worktree
-		for (let i = 1; i < existingDeps.length; i++) {
-			try {
-				await $`git -C ${worktreePath} merge ${existingDeps[i]} --no-edit -m ${'Merge dependency branch ' + existingDeps[i]}`.quiet();
-			} catch {
-				await $`git -C ${worktreePath} merge --abort`.quiet().catch(() => {});
-				await removeWorktree(worktreePath, branchName, repoRoot, logger, issueNumber);
-				return {
-					ok: false,
-					worktreePath,
-					baseBranch,
-					error: `Merge conflict merging ${existingDeps[i]} into ${branchName} (based on ${baseBranch})`
-				};
-			}
-		}
-
-		return { ok: true, worktreePath, baseBranch };
-	} catch (err) {
-		return { ok: false, worktreePath, baseBranch, error: `Failed to create worktree for ${branchName}: ${err}` };
-	}
-}
-
-export async function removeWorktree(
-	worktreePath: string,
-	branchName: string,
-	repoRoot: string,
-	logger: RunLogger,
-	issueNumber: number
-): Promise<void> {
-	try {
-		await $`git -C ${repoRoot} worktree remove --force ${worktreePath}`.quiet();
-	} catch {
-		// Force-remove the directory if git worktree remove fails
-		if (existsSync(worktreePath)) {
-			rmSync(worktreePath, { recursive: true, force: true });
-		}
-		// Prune stale worktree entries
-		await $`git -C ${repoRoot} worktree prune`.quiet().catch(() => {});
-	}
-	logger.worktreeRemoved(issueNumber, worktreePath);
 }
 
 // ---------------------------------------------------------------------------

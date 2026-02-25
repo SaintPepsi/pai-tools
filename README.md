@@ -53,6 +53,7 @@ Interactive PR merge tool. Discovers completed orchestrated PRs, handles conflic
 pait finalize --dry-run          # Preview merge plan
 pait finalize --single           # Merge one PR at a time
 pait finalize --strategy merge   # Use merge commits instead of squash
+pait finalize --auto-resolve     # Resolve conflicts via Claude (non-interactive)
 ```
 
 See [tools/finalize/README.md](tools/finalize/README.md) for full docs and conflict resolution UX.

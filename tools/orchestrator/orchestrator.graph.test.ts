@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { buildGraph, topologicalSort } from './dependency-graph.ts';
+import { buildGraph, topologicalSort, computeTiers } from './dependency-graph.ts';
 import type { GitHubIssue, OrchestratorConfig } from './types.ts';
 
 const testConfig: OrchestratorConfig = {
@@ -108,5 +108,69 @@ describe('topologicalSort', () => {
 		const sorted = topologicalSort(graph);
 
 		expect(sorted).toEqual([5]);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// computeTiers
+// ---------------------------------------------------------------------------
+
+describe('computeTiers', () => {
+	test('puts all independent issues in tier 0', () => {
+		const issues = [
+			makeIssue(1, 'A', ''),
+			makeIssue(2, 'B', ''),
+			makeIssue(3, 'C', '')
+		];
+		const graph = buildGraph(issues, testConfig);
+		const tiers = computeTiers(graph);
+
+		expect(tiers).toHaveLength(1);
+		expect(tiers[0].sort()).toEqual([1, 2, 3]);
+	});
+
+	test('separates dependency chain into sequential tiers', () => {
+		const issues = [
+			makeIssue(1, 'Root', ''),
+			makeIssue(2, 'Mid', 'Depends on #1'),
+			makeIssue(3, 'Leaf', 'Depends on #2')
+		];
+		const graph = buildGraph(issues, testConfig);
+		const tiers = computeTiers(graph);
+
+		expect(tiers).toHaveLength(3);
+		expect(tiers[0]).toEqual([1]);
+		expect(tiers[1]).toEqual([2]);
+		expect(tiers[2]).toEqual([3]);
+	});
+
+	test('groups siblings with same deps in same tier', () => {
+		const issues = [
+			makeIssue(1, 'Root', ''),
+			makeIssue(2, 'Left', 'Depends on #1'),
+			makeIssue(3, 'Right', 'Depends on #1')
+		];
+		const graph = buildGraph(issues, testConfig);
+		const tiers = computeTiers(graph);
+
+		expect(tiers).toHaveLength(2);
+		expect(tiers[0]).toEqual([1]);
+		expect(tiers[1].sort()).toEqual([2, 3]);
+	});
+
+	test('diamond dependency produces three tiers', () => {
+		const issues = [
+			makeIssue(1, 'Root', ''),
+			makeIssue(2, 'Left', 'Depends on #1'),
+			makeIssue(3, 'Right', 'Depends on #1'),
+			makeIssue(4, 'Merge', 'Depends on #2, #3')
+		];
+		const graph = buildGraph(issues, testConfig);
+		const tiers = computeTiers(graph);
+
+		expect(tiers).toHaveLength(3);
+		expect(tiers[0]).toEqual([1]);
+		expect(tiers[1].sort()).toEqual([2, 3]);
+		expect(tiers[2]).toEqual([4]);
 	});
 });

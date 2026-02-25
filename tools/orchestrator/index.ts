@@ -13,11 +13,12 @@ import { RunLogger } from '../../shared/logging.ts';
 import { findRepoRoot, loadToolConfig, saveToolConfig, getStateFilePath, migrateStateIfNeeded } from '../../shared/config.ts';
 import { loadState } from '../../shared/state.ts';
 import { fetchOpenIssues } from '../../shared/github.ts';
-import { buildGraph, topologicalSort } from './dependency-graph.ts';
-import { printExecutionPlan, printStatus } from './display.ts';
+import { buildGraph, topologicalSort, computeTiers } from './dependency-graph.ts';
+import { printExecutionPlan, printStatus, printParallelPlan } from './display.ts';
 import { promptForVerifyCommands } from './prompt.ts';
 import { runDryRun } from './dry-run.ts';
 import { runMainLoop } from './execution.ts';
+import { runParallelLoop } from './parallel.ts';
 import { initState } from './state-helpers.ts';
 import { ORCHESTRATOR_DEFAULTS } from './defaults.ts';
 import type {
@@ -31,9 +32,10 @@ import type {
 
 export { loadState, saveState } from '../../shared/state.ts';
 export { localBranchExists, deleteLocalBranch, createWorktree, removeWorktree } from '../../shared/git.ts';
-export { parseDependencies, toKebabSlug, buildGraph, topologicalSort } from './dependency-graph.ts';
+export { parseDependencies, toKebabSlug, buildGraph, topologicalSort, computeTiers } from './dependency-graph.ts';
 export { assessIssueSize, buildImplementationPrompt, fixVerificationFailure, implementIssue } from './agent-runner.ts';
-export { printExecutionPlan, printStatus } from './display.ts';
+export { printExecutionPlan, printStatus, printParallelPlan } from './display.ts';
+export { runParallelLoop } from './parallel.ts';
 export { buildPRBody, runMainLoop } from './execution.ts';
 export { runDryRun } from './dry-run.ts';
 export { initState, getIssueState } from './state-helpers.ts';
@@ -66,6 +68,17 @@ export function parseFlags(args: string[]): OrchestratorFlags {
 		return val;
 	})();
 
+	const parallel = (() => {
+		const idx = args.indexOf('--parallel');
+		if (idx === -1) return 1;
+		const val = Number(args[idx + 1]);
+		if (Number.isNaN(val) || val < 1) {
+			console.error('--parallel requires a positive integer (e.g. --parallel 3)');
+			process.exit(1);
+		}
+		return val;
+	})();
+
 	return {
 		dryRun: args.includes('--dry-run'),
 		reset: args.includes('--reset'),
@@ -75,7 +88,8 @@ export function parseFlags(args: string[]): OrchestratorFlags {
 		noVerify: args.includes('--no-verify'),
 		singleMode: args.includes('--single'),
 		singleIssue,
-		fromIssue
+		fromIssue,
+		parallel
 	};
 }
 
@@ -141,7 +155,13 @@ export async function orchestrate(flags: OrchestratorFlags): Promise<void> {
 	const graph = buildGraph(issues, config);
 	const executionOrder = topologicalSort(graph);
 
-	printExecutionPlan(executionOrder, graph, config.baseBranch);
+	// Show tier visualization when running in parallel mode
+	if (flags.parallel > 1 && !flags.singleMode) {
+		const tiers = computeTiers(graph);
+		printParallelPlan(tiers, graph, flags.parallel);
+	} else {
+		printExecutionPlan(executionOrder, graph, config.baseBranch);
+	}
 
 	// Initialize run logger
 	const logger = new RunLogger(repoRoot);
@@ -155,13 +175,21 @@ export async function orchestrate(flags: OrchestratorFlags): Promise<void> {
 		return;
 	}
 
+	const useParallel = flags.parallel > 1 && !flags.singleMode;
+	const runMode = flags.singleMode ? 'single' : useParallel ? `parallel:${flags.parallel}` : 'full';
+
 	const state = loadState(stateFile) ?? initState();
 	logger.runStart({
-		mode: flags.singleMode ? 'single' : 'full',
+		mode: runMode,
 		issueCount: executionOrder.length,
 		singleIssue: flags.singleIssue,
 		fromIssue: flags.fromIssue
 	});
-	await runMainLoop(executionOrder, graph, state, config, flags, stateFile, repoRoot, logger);
+
+	if (useParallel) {
+		await runParallelLoop(executionOrder, graph, state, config, flags, 0, stateFile, repoRoot, logger);
+	} else {
+		await runMainLoop(executionOrder, graph, state, config, flags, stateFile, repoRoot, logger);
+	}
 	logger.runComplete({ issueCount: executionOrder.length });
 }

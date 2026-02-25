@@ -66,6 +66,7 @@ const HELP = `\x1b[36mpait\x1b[0m — PAI Tools CLI
   --skip-e2e       Skip E2E verification step
   --skip-split     Skip issue splitting assessment
   --no-verify      Skip verification requirement
+  --parallel <N>   Run N issues concurrently (default: 1 = sequential)
 
 \x1b[1mVERIFY FLAGS\x1b[0m
   --skip-e2e       Skip E2E verification step

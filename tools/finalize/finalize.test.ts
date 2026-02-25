@@ -275,6 +275,7 @@ describe('finalize state: error clearing on merge', () => {
 
 describe('finalize source guards (regression)', () => {
 	const source = readFileSync(join(import.meta.dir, 'index.ts'), 'utf-8');
+	const gitSource = readFileSync(join(import.meta.dir, '../../shared/git.ts'), 'utf-8');
 
 	test('no startIdx guard — all PRs get rebased', () => {
 		// Regression: `if (i > startIdx)` skipped rebase for first PR.
@@ -284,7 +285,8 @@ describe('finalize source guards (regression)', () => {
 	test('rebase --continue sets GIT_EDITOR to prevent editor hang', () => {
 		// Regression: bare `rebase --continue` could open an editor in
 		// non-interactive contexts, hanging the process indefinitely.
-		const continueLines = source.split('\n').filter(
+		// These functions live in shared/git.ts after extraction.
+		const continueLines = gitSource.split('\n').filter(
 			(line) => line.includes('rebase --continue')
 		);
 		expect(continueLines.length).toBeGreaterThanOrEqual(2);
@@ -306,15 +308,16 @@ describe('finalize source guards (regression)', () => {
 
 	test('conflict file paths use join() not template concatenation', () => {
 		// Regression: `${repoRoot}/${c.file}` is fragile; join() is correct.
-		// Check that no readFileSync or writeFileSync uses template path with c.file.
+		// Conflict resolution functions live in shared/git.ts after extraction.
 		const templatePathPattern = /(?:readFileSync|writeFileSync)\(`\$\{repoRoot\}\/\$\{c\.file\}`/;
-		expect(source).not.toMatch(templatePathPattern);
+		expect(gitSource).not.toMatch(templatePathPattern);
 	});
 
 	test('promptLine is not defined locally — uses shared module', () => {
 		// Regression: promptLine was duplicated in verify and finalize.
+		// After extraction, promptLine is used in shared/git.ts.
 		expect(source).not.toContain('function promptLine');
-		expect(source).toContain("from '../../shared/prompt.ts'");
+		expect(gitSource).toContain("from './prompt.ts'");
 	});
 });
 

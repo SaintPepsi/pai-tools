@@ -7,21 +7,21 @@
 
 import { $ } from 'bun';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
 import { log } from '../../shared/log.ts';
-import { promptLine } from '../../shared/prompt.ts';
-import { runClaude } from '../../shared/claude.ts';
 import { findRepoRoot, loadToolConfig, getStateFilePath } from '../../shared/config.ts';
 import { loadState, saveState } from '../../shared/state.ts';
 import { runVerify } from '../verify/index.ts';
 import type { VerifyCommand, E2EConfig } from '../verify/types.ts';
+import {
+	rebaseBranch, detectConflicts, presentConflicts, resolveConflicts, autoResolveConflicts
+} from '../../shared/git.ts';
+export { rebaseBranch, detectConflicts, presentConflicts, resolveConflicts, autoResolveConflicts } from '../../shared/git.ts';
 import type {
 	FinalizeFlags,
 	FinalizeState,
 	PRMergeState,
 	MergeOrder,
-	MergeStrategy,
-	ConflictInfo
+	MergeStrategy
 } from './types.ts';
 
 // Re-export types
@@ -166,162 +166,6 @@ export function determineMergeOrder(prs: MergeOrder[]): MergeOrder[] {
 	}
 
 	return result;
-}
-
-// ---------------------------------------------------------------------------
-// Rebase + conflict handling
-// ---------------------------------------------------------------------------
-
-export async function rebaseBranch(
-	branch: string,
-	onto: string,
-	repoRoot: string
-): Promise<{ ok: boolean; conflicts?: ConflictInfo[] }> {
-	try {
-		await $`git -C ${repoRoot} checkout ${branch}`.quiet();
-		await $`git -C ${repoRoot} rebase ${onto}`.quiet();
-		return { ok: true };
-	} catch {
-		// Check for conflict
-		const conflicts = await detectConflicts(repoRoot);
-		if (conflicts.length > 0) {
-			return { ok: false, conflicts };
-		}
-		// Abort failed rebase that isn't a conflict
-		await $`git -C ${repoRoot} rebase --abort`.quiet().catch(() => {});
-		return { ok: false };
-	}
-}
-
-export async function detectConflicts(repoRoot: string): Promise<ConflictInfo[]> {
-	try {
-		const output = (
-			await $`git -C ${repoRoot} diff --name-only --diff-filter=U`.text()
-		).trim();
-		if (!output) return [];
-		return output.split('\n').map((file) => ({ file }));
-	} catch {
-		return [];
-	}
-}
-
-export async function presentConflicts(
-	conflicts: ConflictInfo[]
-): Promise<Map<string, string>> {
-	const intents = new Map<string, string>();
-
-	log.warn(`${conflicts.length} file(s) have conflicts:`);
-	for (const c of conflicts) {
-		console.log(`  - ${c.file}`);
-	}
-	console.log('');
-
-	for (const c of conflicts) {
-		log.info(`Conflict in: ${c.file}`);
-		const answer = await promptLine(
-			'  Resolution (ours/theirs/describe intent): '
-		);
-		intents.set(c.file, answer.trim() || 'ours');
-	}
-
-	return intents;
-}
-
-export async function resolveConflicts(
-	conflicts: ConflictInfo[],
-	intents: Map<string, string>,
-	repoRoot: string
-): Promise<boolean> {
-	for (const c of conflicts) {
-		const intent = intents.get(c.file) ?? 'ours';
-
-		if (intent === 'ours') {
-			await $`git -C ${repoRoot} checkout --ours ${c.file}`.quiet();
-			await $`git -C ${repoRoot} add ${c.file}`.quiet();
-		} else if (intent === 'theirs') {
-			await $`git -C ${repoRoot} checkout --theirs ${c.file}`.quiet();
-			await $`git -C ${repoRoot} add ${c.file}`.quiet();
-		} else {
-			// Custom intent: use Claude to resolve
-			const conflictContent = readFileSync(join(repoRoot, c.file), 'utf-8');
-			const prompt = `You are resolving a git merge conflict in the file "${c.file}".
-
-The user's intent for resolving this conflict is: "${intent}"
-
-Here is the file with conflict markers:
-
-${conflictContent}
-
-Output ONLY the resolved file content. No explanation, no code fences, just the file content.`;
-
-			const result = await runClaude({
-				prompt,
-				model: 'sonnet',
-				cwd: repoRoot
-			});
-
-			if (result.ok && result.output.trim()) {
-				writeFileSync(join(repoRoot, c.file), result.output);
-				await $`git -C ${repoRoot} add ${c.file}`.quiet();
-			} else {
-				log.error(`Failed to resolve ${c.file} via Claude`);
-				return false;
-			}
-		}
-	}
-
-	// Continue rebase (GIT_EDITOR=true prevents editor from opening in non-interactive context)
-	try {
-		await $`git -C ${repoRoot} rebase --continue`.env({ ...process.env, GIT_EDITOR: 'true' }).quiet();
-		return true;
-	} catch {
-		log.error('Rebase continue failed after conflict resolution');
-		await $`git -C ${repoRoot} rebase --abort`.quiet().catch(() => {});
-		return false;
-	}
-}
-
-export async function autoResolveConflicts(
-	conflicts: ConflictInfo[],
-	repoRoot: string
-): Promise<boolean> {
-	for (const c of conflicts) {
-		const conflictContent = readFileSync(join(repoRoot, c.file), 'utf-8');
-		const prompt = `You are resolving a git merge conflict in the file "${c.file}".
-
-Resolve this conflict by keeping both changes where possible. If the changes are incompatible, prefer the incoming (feature branch) version marked with >>>>>>> but integrate any non-conflicting parts from the current branch marked with <<<<<<<.
-
-Here is the file with conflict markers:
-
-${conflictContent}
-
-Output ONLY the resolved file content. No explanation, no code fences, just the file content.`;
-
-		const result = await runClaude({
-			prompt,
-			model: 'sonnet',
-			cwd: repoRoot
-		});
-
-		if (result.ok && result.output.trim()) {
-			writeFileSync(join(repoRoot, c.file), result.output);
-			await $`git -C ${repoRoot} add ${c.file}`.quiet();
-			log.ok(`Auto-resolved: ${c.file}`);
-		} else {
-			log.error(`Failed to auto-resolve ${c.file}`);
-			return false;
-		}
-	}
-
-	// Continue rebase (GIT_EDITOR=true prevents editor from opening in non-interactive context)
-	try {
-		await $`git -C ${repoRoot} rebase --continue`.env({ ...process.env, GIT_EDITOR: 'true' }).quiet();
-		return true;
-	} catch {
-		log.error('Rebase continue failed after auto-resolution');
-		await $`git -C ${repoRoot} rebase --abort`.quiet().catch(() => {});
-		return false;
-	}
 }
 
 // ---------------------------------------------------------------------------

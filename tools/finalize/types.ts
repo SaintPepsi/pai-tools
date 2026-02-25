@@ -33,9 +33,7 @@ export interface FinalizeState {
 	prs: Record<number, PRMergeState>;
 }
 
-export interface ConflictInfo {
-	file: string;
-}
+export type { ConflictInfo } from '../../shared/git.ts';
 
 export interface MergeOrder {
 	issueNumber: number;

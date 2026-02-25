@@ -9,8 +9,7 @@ import { $ } from 'bun';
 import { log } from '../../shared/log.ts';
 import { findRepoRoot, loadToolConfig, getStateFilePath } from '../../shared/config.ts';
 import { loadState, saveState } from '../../shared/state.ts';
-import { discoverMergeablePRs, determineMergeOrder } from './pr-discovery.ts';
-import { mergePR } from '../../shared/github.ts';
+import { discoverMergeablePRs, determineMergeOrder, mergePR } from '../../shared/github.ts';
 import { runVerify } from '../verify/index.ts';
 import type { VerifyCommand, E2EConfig } from '../verify/types.ts';
 import {
@@ -25,8 +24,9 @@ import type {
 } from './types.ts';
 
 // Re-export types and shared GitHub operations
-export type { FinalizeFlags, FinalizeState, PRMergeState, MergeOrder } from './types.ts';
-export { discoverMergeablePRs, determineMergeOrder } from './pr-discovery.ts';
+export type { FinalizeFlags, FinalizeState, PRMergeState } from './types.ts';
+export type { MergeOrder } from '../../shared/github.ts';
+export { discoverMergeablePRs, determineMergeOrder } from '../../shared/github.ts';
 
 // ---------------------------------------------------------------------------
 // Flag parsing

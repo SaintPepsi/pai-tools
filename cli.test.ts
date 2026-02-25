@@ -9,7 +9,7 @@ describe('CLI help text sync', () => {
 		'utf-8'
 	);
 	const analyzeSource = readFileSync(
-		join(import.meta.dir, 'tools/analyze/index.ts'),
+		join(import.meta.dir, 'tools/analyze/flags.ts'),
 		'utf-8'
 	);
 	const verifySource = readFileSync(
@@ -137,10 +137,10 @@ describe('Tool README flag sync', () => {
 	}
 
 	const tools = [
-		{ name: 'orchestrator', fn: 'parseFlags', dir: 'tools/orchestrator' },
-		{ name: 'analyze', fn: 'parseAnalyzeFlags', dir: 'tools/analyze' },
-		{ name: 'verify', fn: 'parseVerifyFlags', dir: 'tools/verify' },
-		{ name: 'finalize', fn: 'parseFinalizeFlags', dir: 'tools/finalize' }
+		{ name: 'orchestrator', fn: 'parseFlags', dir: 'tools/orchestrator', file: 'index.ts' },
+		{ name: 'analyze', fn: 'parseAnalyzeFlags', dir: 'tools/analyze', file: 'flags.ts' },
+		{ name: 'verify', fn: 'parseVerifyFlags', dir: 'tools/verify', file: 'index.ts' },
+		{ name: 'finalize', fn: 'parseFinalizeFlags', dir: 'tools/finalize', file: 'index.ts' }
 	];
 
 	for (const tool of tools) {
@@ -148,7 +148,7 @@ describe('Tool README flag sync', () => {
 		if (!existsSync(readmePath)) continue;
 
 		test(`every ${tool.name} flag appears in ${tool.dir}/README.md`, () => {
-			const toolSource = readFileSync(join(import.meta.dir, tool.dir, 'index.ts'), 'utf-8');
+			const toolSource = readFileSync(join(import.meta.dir, tool.dir, tool.file), 'utf-8');
 			const flags = extractFlags(toolSource, tool.fn);
 			const toolReadme = readFileSync(readmePath, 'utf-8');
 

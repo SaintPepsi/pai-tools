@@ -15,6 +15,7 @@ pait orchestrate --reset            # Clear state and start fresh
 pait orchestrate --skip-e2e         # Skip E2E verification step
 pait orchestrate --skip-split       # Skip issue splitting assessment
 pait orchestrate --no-verify        # Skip verification requirement
+pait orchestrate --parallel 3       # Run up to 3 issues concurrently
 ```
 
 ## Config

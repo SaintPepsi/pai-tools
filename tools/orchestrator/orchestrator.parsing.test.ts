@@ -18,6 +18,7 @@ describe('parseFlags', () => {
 		expect(flags.singleMode).toBe(false);
 		expect(flags.singleIssue).toBeNull();
 		expect(flags.fromIssue).toBeNull();
+		expect(flags.parallel).toBe(1);
 	});
 
 	test('boolean flags parse correctly', () => {
@@ -59,6 +60,26 @@ describe('parseFlags', () => {
 	// mocking process.exit. The --single flag has a graceful fallback (returns
 	// null) so it can be unit-tested; --from does not. Covered by integration
 	// tests and the visible error message in the CLI.
+
+	test('--parallel parses positive integer', () => {
+		const flags = parseFlags(['--parallel', '3']);
+		expect(flags.parallel).toBe(3);
+	});
+
+	test('--parallel 1 is valid', () => {
+		const flags = parseFlags(['--parallel', '1']);
+		expect(flags.parallel).toBe(1);
+	});
+
+	test('--parallel combined with other flags', () => {
+		const flags = parseFlags(['--dry-run', '--parallel', '4', '--skip-e2e']);
+		expect(flags.parallel).toBe(4);
+		expect(flags.dryRun).toBe(true);
+		expect(flags.skipE2e).toBe(true);
+	});
+
+	// --parallel without a valid number calls process.exit(1) in production code.
+	// Same limitation as --from: cannot be unit-tested without mocking process.exit.
 });
 
 // ---------------------------------------------------------------------------

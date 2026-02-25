@@ -101,4 +101,42 @@ export interface IssueData {
 	title: string;
 	body: string;
 	labels: string[];
+	/** Relative file path this issue targets (used for dedup check). */
+	relativePath?: string;
+	/** Issue numbers this issue depends on (used for Depends on markers). */
+	dependsOn?: number[];
+}
+
+// ─── Tier 3 Types ─────────────────────────────────────────────────────────────
+
+/** A consolidated cross-file issue produced by Tier 3 analysis. */
+export interface ConsolidatedIssue {
+	/** Short title for the GitHub issue. */
+	title: string;
+	/** Markdown body describing what to extract and where. */
+	body: string;
+	/** Relative paths of source files this issue covers. */
+	files: string[];
+	/** IDs (relativePath) of per-file issues this consolidated issue supersedes. */
+	supersedes: string[];
+}
+
+/** A dependency relationship between two per-file issues. */
+export interface Tier3Dependency {
+	/** relativePath of the issue that must be resolved first. */
+	prerequisite: string;
+	/** relativePath of the issue that depends on the prerequisite. */
+	dependent: string;
+	/** Human-readable reason for the dependency. */
+	reason: string;
+}
+
+/** Full output of the Tier 3 consolidation pass. */
+export interface Tier3Result {
+	/** Cross-file shared-module extraction issues. */
+	consolidatedIssues: ConsolidatedIssue[];
+	/** Dependency edges between per-file issues. */
+	dependencies: Tier3Dependency[];
+	/** One-paragraph summary of cross-file patterns found. */
+	summary: string;
 }

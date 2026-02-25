@@ -128,21 +128,74 @@ export function buildIssueData(result: AnalysisResult): IssueData | null {
 	const labels = ['refactor', 'ai-suggested'];
 	if (tier1.severity === 'critical') labels.push('priority:high');
 
-	return { title, body, labels };
+	return { title, body, labels, relativePath: tier1.relativePath };
+}
+
+// ─── Duplicate Detection ──────────────────────────────────────────────────────
+
+/**
+ * Check whether an open issue already exists targeting the given file path.
+ * Searches for issues with a title matching `refactor({relativePath})`.
+ * Returns the existing issue number if found, null otherwise.
+ */
+export function findExistingIssue(relativePath: string, repoRoot: string): number | null {
+	const searchQuery = `refactor(${relativePath})`;
+	const check = Bun.spawnSync(
+		['gh', 'issue', 'list', '--search', searchQuery, '--state', 'open', '--json', 'number,title'],
+		{
+			cwd: repoRoot,
+			stdout: 'pipe',
+			stderr: 'pipe',
+		}
+	);
+
+	const output = new TextDecoder().decode(check.stdout as Buffer).trim();
+	try {
+		const issues = JSON.parse(output) as { number: number; title: string }[];
+		const match = issues.find(i => i.title.startsWith(`refactor(${relativePath})`));
+		return match ? match.number : null;
+	} catch {
+		return null;
+	}
 }
 
 // ─── Issue Creation ──────────────────────────────────────────────────────────
 
-export async function createGitHubIssue(issue: IssueData, repoRoot: string, dryRun: boolean): Promise<string | null> {
+/**
+ * Create a GitHub issue, skipping if a duplicate already exists for the same file.
+ * Returns the new issue URL on success, null on skip or failure.
+ */
+export async function createGitHubIssue(
+	issue: IssueData,
+	repoRoot: string,
+	dryRun: boolean,
+): Promise<string | null> {
+	// Deduplication check: skip if an open issue already targets this file
+	if (issue.relativePath) {
+		const existingNumber = findExistingIssue(issue.relativePath, repoRoot);
+		if (existingNumber !== null) {
+			log.info(`Skipping ${issue.relativePath} — open issue #${existingNumber} already exists`);
+			return null;
+		}
+	}
+
+	// Build the full body, prepending dependency markers if needed
+	let body = issue.body;
+	if (issue.dependsOn && issue.dependsOn.length > 0) {
+		const depList = issue.dependsOn.map(n => `#${n}`).join(', ');
+		body = `> **Depends on:** ${depList}\n\n${body}`;
+	}
+
 	if (dryRun) {
-		log.info(`[DRY RUN] Would create: ${issue.title}`);
+		const depStr = issue.dependsOn?.length ? ` (depends on: ${issue.dependsOn.map(n => `#${n}`).join(', ')})` : '';
+		log.info(`[DRY RUN] Would create: ${issue.title}${depStr}`);
 		return null;
 	}
 
 	const labelArgs = issue.labels.flatMap(l => ['--label', l]);
 
 	const proc = Bun.spawn(
-		['gh', 'issue', 'create', '--title', issue.title, '--body', issue.body, ...labelArgs],
+		['gh', 'issue', 'create', '--title', issue.title, '--body', body, ...labelArgs],
 		{
 			cwd: repoRoot,
 			stdout: 'pipe',
@@ -160,4 +213,13 @@ export async function createGitHubIssue(issue: IssueData, repoRoot: string, dryR
 	}
 
 	return output.trim();
+}
+
+/**
+ * Parse an issue number from a GitHub issue URL.
+ * e.g. "https://github.com/owner/repo/issues/42" → 42
+ */
+export function parseIssueNumber(url: string): number | null {
+	const match = url.match(/\/issues\/(\d+)/);
+	return match ? parseInt(match[1], 10) : null;
 }

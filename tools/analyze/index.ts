@@ -182,7 +182,6 @@ export async function analyze(flags: RefactorFlags): Promise<void> {
 		totalFiles: files.length,
 		cacheHits,
 	});
-	const { results } = report;
 
 	// ── Output ──
 	if (flags.format === 'json') {
@@ -194,7 +193,7 @@ export async function analyze(flags: RefactorFlags): Promise<void> {
 	// ── GitHub Issues ──
 	if (flags.issues) {
 		log.step('GITHUB ISSUES');
-		const flaggedResults = results.filter(r => r.tier1.severity !== 'ok');
+		const flaggedResults = report.results.filter(r => r.tier1.severity !== 'ok');
 
 		// Collect all unique labels and ensure they exist
 		const allLabels = new Set<string>();

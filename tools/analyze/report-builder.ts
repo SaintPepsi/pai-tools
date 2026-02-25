@@ -29,8 +29,9 @@ export function buildReport(params: BuildReportParams): RefactorReport {
 	const warnings = tier1Results.filter(r => r.severity === 'warn').length;
 	const ok = tier1Results.filter(r => r.severity === 'ok').length;
 
+	// flaggedFiles: count of files with severity !== 'ok' (i.e. 'warn' or 'critical')
 	const flagged = tier1Results.filter(r => r.severity !== 'ok');
-	const topOffenders = flagged
+	const topOffenders = [...flagged]
 		.sort((a, b) => b.signals.length - a.signals.length || b.lineCount - a.lineCount)
 		.slice(0, 10)
 		.map(r => ({ file: r.relativePath, lineCount: r.lineCount, signals: r.signals.length }));

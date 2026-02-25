@@ -179,10 +179,12 @@ export async function finalize(flags: FinalizeFlags): Promise<void> {
 	// Load or init state
 	const state = loadFinalizeState(stateFile) ?? initFinalizeState();
 
-	// Ensure we're on the base branch
+	// Ensure we're on the base branch with latest remote
 	const baseBranch = ordered[startIdx]?.baseBranch ?? 'master';
 	await $`git -C ${repoRoot} checkout ${baseBranch}`.quiet();
-	await $`git -C ${repoRoot} pull --ff-only`.quiet().catch(() => {});
+	await $`git -C ${repoRoot} pull --ff-only`.quiet().catch((e) => {
+		log.warn(`Initial pull of ${baseBranch} failed: ${String(e).slice(0, 200)}`);
+	});
 
 	// Merge loop
 	for (let i = startIdx; i < ordered.length; i++) {
@@ -203,6 +205,12 @@ export async function finalize(flags: FinalizeFlags): Promise<void> {
 		}
 
 		const prState = state.prs[pr.prNumber];
+
+		// Pull latest base branch before rebase (CI may push version bumps between merges)
+		await $`git -C ${repoRoot} checkout ${baseBranch}`.quiet();
+		await $`git -C ${repoRoot} pull --ff-only`.quiet().catch((e) => {
+			log.warn(`Pre-rebase pull of ${baseBranch} failed: ${String(e).slice(0, 200)}`);
+		});
 
 		// Rebase onto target (handles stale branches, stacked PRs, and conflicts)
 		log.info(`Rebasing ${pr.branch} onto ${baseBranch}...`);
@@ -259,9 +267,11 @@ export async function finalize(flags: FinalizeFlags): Promise<void> {
 			continue;
 		}
 
-		// Pull merged changes
+		// Pull merged changes (includes squash commit + any CI version bumps)
 		await $`git -C ${repoRoot} checkout ${baseBranch}`.quiet();
-		await $`git -C ${repoRoot} pull --ff-only`.quiet().catch(() => {});
+		await $`git -C ${repoRoot} pull --ff-only`.quiet().catch((e) => {
+			log.warn(`Post-merge pull of ${baseBranch} failed: ${String(e).slice(0, 200)}`);
+		});
 
 		// Post-merge verification
 		if (!flags.noVerify) {

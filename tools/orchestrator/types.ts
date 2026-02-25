@@ -13,7 +13,7 @@ export interface DependencyNode {
 	branch: string;
 }
 
-export type IssueStatus = 'pending' | 'in_progress' | 'completed' | 'failed' | 'split';
+export type IssueStatus = 'pending' | 'in_progress' | 'completed' | 'failed' | 'split' | 'blocked';
 
 export interface IssueState {
 	number: number;
@@ -65,4 +65,5 @@ export interface OrchestratorFlags {
 	singleMode: boolean;
 	singleIssue: number | null;
 	fromIssue: number | null;
+	parallel: number;
 }

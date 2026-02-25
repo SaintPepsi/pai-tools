@@ -42,6 +42,38 @@ export function buildGraph(
 	return graph;
 }
 
+/**
+ * Assign each issue to the earliest tier where all its deps are in earlier tiers.
+ * Tier 0 = no in-graph deps; Tier N = all deps in tiers 0..N-1.
+ * Returns an array of tiers, each tier being an array of issue numbers.
+ */
+export function computeTiers(graph: Map<number, DependencyNode>): number[][] {
+	const tierOf = new Map<number, number>();
+
+	function getTier(num: number): number {
+		if (tierOf.has(num)) return tierOf.get(num)!;
+		const node = graph.get(num);
+		if (!node) return -1;
+		const inGraphDeps = node.dependsOn.filter((d) => graph.has(d));
+		const myTier =
+			inGraphDeps.length === 0 ? 0 : Math.max(...inGraphDeps.map((d) => getTier(d))) + 1;
+		tierOf.set(num, myTier);
+		return myTier;
+	}
+
+	for (const num of graph.keys()) {
+		getTier(num);
+	}
+
+	const tiers: number[][] = [];
+	for (const [num, tier] of tierOf) {
+		while (tiers.length <= tier) tiers.push([]);
+		tiers[tier].push(num);
+	}
+
+	return tiers;
+}
+
 export function topologicalSort(graph: Map<number, DependencyNode>): number[] {
 	const visited = new Set<number>();
 	const visiting = new Set<number>();

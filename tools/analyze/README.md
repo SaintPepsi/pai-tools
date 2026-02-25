@@ -80,6 +80,7 @@ pait analyze ./src/big-file.ts
 | `--budget <N>` | 50 | Max AI analysis calls |
 | `--include <glob>` | all source files | Only analyze matching files |
 | `--verbose` | false | Show all files, not just flagged |
+| `--quiet` | false | Suppress progress output |
 
 ## Language Thresholds
 

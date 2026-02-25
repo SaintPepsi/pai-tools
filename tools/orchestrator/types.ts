@@ -2,6 +2,8 @@
  * All TypeScript interfaces for the issue orchestrator.
  */
 
+import type { VerifyCommand, E2EConfig } from '../verify/types.ts';
+
 export interface GitHubIssue {
 	number: number;
 	title: string;
@@ -37,16 +39,8 @@ export interface OrchestratorState {
 	issues: Record<number, IssueState>;
 }
 
-export interface VerifyCommand {
-	name: string;
-	cmd: string;
-}
-
-export interface E2EConfig {
-	run: string;
-	update: string;
-	snapshotGlob: string;
-}
+// Re-exported from verify tool for backward compatibility
+export type { VerifyCommand, E2EConfig } from '../verify/types.ts';
 
 export interface OrchestratorConfig {
 	branchPrefix: string;

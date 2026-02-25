@@ -1,16 +1,16 @@
 /**
- * Core verification engine — importable without CLI scaffolding.
+ * Core verification runner — importable without the flag parsing and
+ * config-loading scaffolding in verify/index.ts.
  *
  * Use `runVerify()` programmatically from the orchestrator, finalize, or
  * any other tool that needs to run verification commands.
+ * Types live in tools/verify/types.ts — import from there directly.
  */
 
 import { $ } from 'bun';
 import { log } from '../../shared/log.ts';
 import type { VerifyOptions, VerifyResult, VerifyStepResult } from './types.ts';
 
-// Re-export types for convenience
-export type { VerifyCommand, VerifyOptions, VerifyResult, VerifyStepResult } from './types.ts';
 
 export async function runVerify(opts: VerifyOptions): Promise<VerifyResult> {
 	const steps: VerifyStepResult[] = [];

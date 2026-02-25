@@ -345,6 +345,8 @@ describe('shared promptLine module', () => {
 			'utf-8'
 		);
 		expect(verifySource).not.toContain('function promptLine');
+		// verify/index.ts must not import shared/prompt.ts after this refactor — guard against regression.
+		expect(verifySource).not.toContain("from '../../shared/prompt.ts'");
 
 		// promptForVerifyCommands now lives in orchestrator/prompt.ts and imports from shared
 		const orchestratorPromptSource = readFileSync(

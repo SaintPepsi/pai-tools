@@ -6,19 +6,22 @@
  * each via Claude agents with full verification.
  */
 
-import { $ } from 'bun';
-import { unlinkSync, existsSync, rmSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { unlinkSync } from 'node:fs';
+import { join } from 'node:path';
 import { log, Spinner } from '../../shared/log.ts';
 import { runClaude } from '../../shared/claude.ts';
 import { RunLogger } from '../../shared/logging.ts';
 import { findRepoRoot, loadToolConfig, saveToolConfig, getStateFilePath, migrateStateIfNeeded } from '../../shared/config.ts';
 import { loadState, saveState } from '../../shared/state.ts';
-import { localBranchExists, deleteLocalBranch, createWorktree, removeWorktree } from '../../shared/git.ts';
+import { createWorktree, removeWorktree } from '../../shared/git.ts';
 export { localBranchExists, deleteLocalBranch, createWorktree, removeWorktree } from '../../shared/git.ts';
 import { fetchOpenIssues, createSubIssues, createPR } from '../../shared/github.ts';
 import { ORCHESTRATOR_DEFAULTS } from './defaults.ts';
 import { runVerify, promptForVerifyCommands } from '../verify/index.ts';
+import { buildGraph, topologicalSort } from './dependency-graph.ts';
+export { parseDependencies, toKebabSlug, buildGraph, topologicalSort } from './dependency-graph.ts';
+import { assessIssueSize, implementIssue } from './agent-runner.ts';
+import { printExecutionPlan, printStatus } from './display.ts';
 import type {
 	GitHubIssue,
 	DependencyNode,
@@ -104,228 +107,6 @@ export function getIssueState(state: OrchestratorState, num: number, title?: str
 }
 
 // ---------------------------------------------------------------------------
-// GitHub helpers (implementation in shared/github.ts)
-// ---------------------------------------------------------------------------
-
-export function parseDependencies(body: string): number[] {
-	const depLine = body.split('\n').find((line) => /depends\s+on/i.test(line));
-	if (!depLine) return [];
-
-	const matches = depLine.matchAll(/#(\d+)/g);
-	return [...matches].map((m) => Number(m[1]));
-}
-
-export function toKebabSlug(title: string): string {
-	return title
-		.toLowerCase()
-		.replace(/^\[\d+\]\s*/, '')
-		.replace(/[^a-z0-9]+/g, '-')
-		.replace(/^-|-$/g, '')
-		.slice(0, 50);
-}
-
-// ---------------------------------------------------------------------------
-// Dependency graph + topological sort
-// ---------------------------------------------------------------------------
-
-export function buildGraph(
-	issues: GitHubIssue[],
-	config: OrchestratorConfig
-): Map<number, DependencyNode> {
-	const graph = new Map<number, DependencyNode>();
-
-	for (const issue of issues) {
-		const deps = parseDependencies(issue.body);
-		graph.set(issue.number, {
-			issue,
-			dependsOn: deps,
-			branch: `${config.branchPrefix}${issue.number}-${toKebabSlug(issue.title)}`
-		});
-	}
-
-	return graph;
-}
-
-export function topologicalSort(graph: Map<number, DependencyNode>): number[] {
-	const visited = new Set<number>();
-	const visiting = new Set<number>();
-	const result: number[] = [];
-
-	function visit(num: number): void {
-		if (visited.has(num)) return;
-		if (visiting.has(num)) {
-			throw new Error(`Circular dependency detected involving issue #${num}`);
-		}
-
-		visiting.add(num);
-
-		const node = graph.get(num);
-		if (node) {
-			for (const dep of node.dependsOn) {
-				if (graph.has(dep)) {
-					visit(dep);
-				}
-			}
-		}
-
-		visiting.delete(num);
-		visited.add(num);
-		result.push(num);
-	}
-
-	for (const num of graph.keys()) {
-		visit(num);
-	}
-
-	return result;
-}
-
-// ---------------------------------------------------------------------------
-// Issue size assessment + splitting
-// ---------------------------------------------------------------------------
-
-async function assessIssueSize(
-	issue: GitHubIssue,
-	config: OrchestratorConfig,
-	repoRoot: string
-): Promise<{
-	shouldSplit: boolean;
-	proposedSplits: { title: string; body: string }[];
-	reasoning: string;
-}> {
-	const prompt = `You are assessing whether a GitHub issue is too large for a single Claude Code agent session to implement.
-
-A single agent session can reliably handle:
-- Up to ~3 new files
-- Up to ~500 lines of new code
-- One coherent feature or system
-
-If the issue requires MORE than that, propose splitting it into smaller sub-issues that can each be done in one session.
-
-ISSUE #${issue.number}: ${issue.title}
-
-${issue.body}
-
-Respond in EXACTLY this JSON format (no markdown, no code fences):
-{
-  "shouldSplit": true/false,
-  "reasoning": "one sentence explanation",
-  "proposedSplits": [
-    {"title": "Sub-issue title", "body": "Sub-issue description with acceptance criteria"}
-  ]
-}
-
-If shouldSplit is false, proposedSplits should be an empty array.
-Be conservative — only split if it's genuinely too large. Most issues with clear acceptance criteria can be done in one pass.`;
-
-	const spinner = new Spinner();
-	spinner.start(`Assessing #${issue.number} size`);
-
-	const { output: rawResult } = await runClaude({
-		prompt,
-		model: config.models.assess,
-		cwd: repoRoot
-	}).catch(() => ({
-		ok: false,
-		output: ''
-	}));
-
-	spinner.stop();
-
-	try {
-		const jsonMatch: RegExpMatchArray | null = rawResult.match(/\{[\s\S]*\}/);
-		if (!jsonMatch) {
-			return {
-				shouldSplit: false,
-				reasoning: 'No JSON found in assessment response',
-				proposedSplits: []
-			};
-		}
-		return JSON.parse(jsonMatch[0]);
-	} catch {
-		return { shouldSplit: false, reasoning: 'Failed to parse assessment', proposedSplits: [] };
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Implementation via Claude agent
-// ---------------------------------------------------------------------------
-
-function buildImplementationPrompt(
-	issue: GitHubIssue,
-	branchName: string,
-	baseBranch: string,
-	config: OrchestratorConfig,
-	repoRoot: string
-): string {
-	const verifyList = config.verify.length > 0
-		? config.verify.map((v) => `- ${v.cmd}`).join('\n')
-		: '(no verification commands configured)';
-
-	return `You are implementing GitHub issue #${issue.number}: ${issue.title}
-
-## Issue Description
-
-${issue.body}
-
-## Context
-
-- You are on branch: ${branchName}
-- Based on: ${baseBranch}
-- Project root: ${repoRoot}
-
-## Instructions
-
-1. Read CLAUDE.md first for project conventions and quality requirements
-2. Explore existing code related to this feature before writing new code
-3. Implement the feature described in the issue
-4. Write tests for new functionality (colocated with source files)
-5. Follow existing patterns in the codebase — check similar features first
-6. Make atomic commits with descriptive messages referencing #${issue.number}
-7. Ensure all verification commands pass before finishing:
-${verifyList}
-
-Do NOT create a pull request. Just implement, test, and commit.`;
-}
-
-async function implementIssue(
-	issue: GitHubIssue,
-	branchName: string,
-	baseBranch: string,
-	config: OrchestratorConfig,
-	worktreePath: string,
-	logger: RunLogger
-): Promise<{ ok: boolean; error?: string }> {
-	const prompt = buildImplementationPrompt(issue, branchName, baseBranch, config, worktreePath);
-
-	const spinner = new Spinner();
-	spinner.start(`Agent implementing #${issue.number}`);
-
-	const result = await runClaude({
-		prompt,
-		model: config.models.implement,
-		cwd: worktreePath,
-		permissionMode: 'acceptEdits',
-		allowedTools: config.allowedTools
-	});
-
-	spinner.stop();
-	log.dim(result.output.slice(-500));
-
-	// Log full agent output
-	logger.agentOutput(issue.number, result.output);
-
-	if (!result.ok) {
-		return { ok: false, error: 'Claude agent failed (exit non-zero)' };
-	}
-	return { ok: true };
-}
-
-// ---------------------------------------------------------------------------
-// Verification pipeline — delegated to tools/verify
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
 // PR body builder
 // ---------------------------------------------------------------------------
 
@@ -356,54 +137,6 @@ ${e2eLine}
 
 ---
 Automated by pai orchestrate`;
-}
-
-// ---------------------------------------------------------------------------
-// Display helpers
-// ---------------------------------------------------------------------------
-
-function printExecutionPlan(order: number[], graph: Map<number, DependencyNode>): void {
-	log.step('EXECUTION PLAN');
-	for (let i = 0; i < order.length; i++) {
-		const num = order[i];
-		const node = graph.get(num);
-		if (!node) continue;
-
-		const deps =
-			node.dependsOn.length > 0
-				? ` (deps: ${node.dependsOn.map((d) => `#${d}`).join(', ')})`
-				: ' (no deps — branches from master)';
-		console.log(`  ${(i + 1).toString().padStart(2)}. #${num} ${node.issue.title}${deps}`);
-		log.dim(`      → branch: ${node.branch}`);
-	}
-	console.log(`\n  Total: ${order.length} issues`);
-}
-
-function printStatus(state: OrchestratorState): void {
-	log.step('ORCHESTRATOR STATUS');
-	const entries = Object.values(state.issues).sort((a, b) => a.number - b.number);
-	const completed = entries.filter((e) => e.status === 'completed').length;
-	const failed = entries.filter((e) => e.status === 'failed').length;
-	const pending = entries.filter((e) => e.status === 'pending').length;
-
-	console.log(`  Started: ${state.startedAt}`);
-	console.log(`  Updated: ${state.updatedAt}`);
-	console.log(`  Progress: ${completed} completed, ${failed} failed, ${pending} pending\n`);
-
-	for (const entry of entries) {
-		const icon =
-			entry.status === 'completed'
-				? '\x1b[32m✓\x1b[0m'
-				: entry.status === 'failed'
-					? '\x1b[31m✗\x1b[0m'
-					: entry.status === 'split'
-						? '\x1b[33m↔\x1b[0m'
-						: '\x1b[2m○\x1b[0m';
-		const titleStr = entry.title ? ` ${entry.title}` : '';
-		const extra = entry.prNumber ? ` → PR #${entry.prNumber}` : '';
-		const errMsg = entry.error ? `\n      \x1b[31m${entry.error}\x1b[0m` : '';
-		console.log(`  ${icon} #${entry.number}${titleStr} [${entry.status}]${extra}${errMsg}`);
-	}
 }
 
 // ---------------------------------------------------------------------------

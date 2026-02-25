@@ -3,7 +3,8 @@ import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { $ } from 'bun';
-import { runVerify, parseVerifyFlags } from './index.ts';
+import { runVerify } from './runner.ts';
+import { parseVerifyFlags } from './index.ts';
 import type { VerifyCommand, VerifyOptions } from './types.ts';
 
 describe('parseVerifyFlags', () => {

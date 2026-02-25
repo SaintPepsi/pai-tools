@@ -339,12 +339,19 @@ describe('shared promptLine module', () => {
 		);
 		expect(sharedSource).toContain('export function promptLine');
 
-		// Verify verify/index.ts also doesn't define it locally
+		// verify/index.ts no longer uses promptLine (moved to orchestrator/prompt.ts)
 		const verifySource = readFileSync(
 			join(import.meta.dir, '../verify/index.ts'),
 			'utf-8'
 		);
 		expect(verifySource).not.toContain('function promptLine');
-		expect(verifySource).toContain("from '../../shared/prompt.ts'");
+
+		// promptForVerifyCommands now lives in orchestrator/prompt.ts and imports from shared
+		const orchestratorPromptSource = readFileSync(
+			join(import.meta.dir, '../orchestrator/prompt.ts'),
+			'utf-8'
+		);
+		expect(orchestratorPromptSource).not.toContain('function promptLine');
+		expect(orchestratorPromptSource).toContain("from '../../shared/prompt.ts'");
 	});
 });

@@ -10,7 +10,7 @@ import { log } from '../../shared/log.ts';
 import { findRepoRoot, loadToolConfig, getStateFilePath } from '../../shared/config.ts';
 import { loadState, saveState } from '../../shared/state.ts';
 import { discoverMergeablePRs, determineMergeOrder, mergePR } from '../../shared/github.ts';
-import { runVerify } from '../verify/index.ts';
+import { runVerify } from '../verify/runner.ts';
 import type { VerifyCommand, E2EConfig } from '../verify/types.ts';
 import {
 	rebaseBranch, detectConflicts, presentConflicts, resolveConflicts, autoResolveConflicts

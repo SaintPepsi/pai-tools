@@ -129,26 +129,34 @@ git checkout src/math.test.ts # restore
 
 Phase 2: Create GitHub issues (mimicking pait analyze)
 
-gh issue create --title "Add divide function to math.ts" \
- --body "Add a divide(a, b) function. Handle division by zero (throw). Add test."
+# NOTE: Issue numbers in this fixture repo are NOT sequential from #1.
+# The repo retains closed issue history across test runs, so new issues
+# get incrementing numbers (e.g. #111, #112, ...). Adjust dependency
+# references accordingly — use the actual issue numbers from gh output.
 
-gh issue create --title "Add reverse function to utils.ts" \
- --body "Add reverse(s: string): string. Add test."
+DIVIDE=$(gh issue create --title "Add divide function to math.ts" \
+ --body "Add a divide(a, b) function. Handle division by zero (throw). Add test." \
+ | grep -o '[0-9]*$')
+
+REVERSE=$(gh issue create --title "Add reverse function to utils.ts" \
+ --body "Add reverse(s: string): string. Add test." \
+ | grep -o '[0-9]*$')
+
+TRUNCATE=$(gh issue create --title "Add truncate function to utils.ts" \
+ --body "Add truncate(str: string, max: number): string that truncates with '...' if longer than max. Add test." \
+ | grep -o '[0-9]*$')
 
 gh issue create --title "Add isEven helper to math.ts" \
  --body "Add isEven(n: number): boolean. Add test.
 
-> **Depends on** #1"
-
-gh issue create --title "Add truncate function to utils.ts" \
- --body "Add truncate(str: string, max: number): string that truncates with '...' if longer than max. Add test."
+Depends on #${DIVIDE}"
 
 gh issue create --title "Update index.ts re-exports" \
  --body "Update src/index.ts to re-export all new functions from math.ts and utils.ts.
 
-> **Depends on** #1
-> **Depends on** #2
-> **Depends on** #4"
+Depends on #${DIVIDE}
+Depends on #${REVERSE}
+Depends on #${TRUNCATE}"
 
 Phase 3: Test pait orchestrate
 
@@ -173,7 +181,7 @@ Phase 5: Test pait finalize --single
 
 pait finalize --single
 
-# EXPECT: Merges first PR (squash), runs post-merge verify
+# EXPECT: Merges first PR (merge commit), runs post-merge verify
 
 # Check: gh pr list shows 4 remaining open PRs
 
@@ -335,7 +343,7 @@ pait finalize --single --from <SECOND_ISSUE_NUMBER>
 
 # EXPECT: First PR still open (gh pr list confirms)
 
-Phase 11: Test --strategy merge
+Phase 11: Test --strategy squash (non-default)
 
 # Create an issue for merge strategy testing
 
@@ -344,17 +352,17 @@ gh issue create --title "Add modulo function to math.ts" \
 
 pait orchestrate --single
 
-# Finalize with merge strategy (no squash)
+# Finalize with squash strategy (non-default — default is now merge)
 
-pait finalize --single --strategy merge
+pait finalize --single --strategy squash
 
-# EXPECT: PR merged via merge commit (not squash)
+# EXPECT: PR merged via squash commit (not merge commit)
 
-# Verify: git log --oneline shows merge commit, not squash
+# Verify: git log --oneline shows squash, no merge commit
 
 git log --oneline -5
 
-# EXPECT: A merge commit like "Merge pull request #N ..."
+# EXPECT: A single squash commit, NOT "Merge pull request #N ..."
 
 Phase 12: First-PR rebase (main diverged)
 
@@ -485,7 +493,43 @@ git checkout main && git pull
 git checkout HEAD~1 -- src/math.test.ts
 git add src/math.test.ts && git commit -m "restore tests" && git push
 
-Phase 8: Verify idempotency and state file
+Phase 8: Test --parallel flag
+
+# Create 3 independent issues (no dependencies between them)
+
+gh issue create --title "Add max function to math.ts" \
+  --body "Add max(a: number, b: number): number. Add test."
+
+gh issue create --title "Add min function to math.ts" \
+  --body "Add min(a: number, b: number): number. Add test."
+
+gh issue create --title "Add padStart function to utils.ts" \
+  --body "Add padStart(s: string, len: number, fill: string): string. Add test."
+
+# 8a. Dry run shows parallel tiers
+
+pait orchestrate --dry-run --parallel 2
+
+# EXPECT: Tier visualization (not linear execution plan)
+# EXPECT: All 3 issues in tier 0 (no dependencies)
+# EXPECT: Max concurrency shown as 2
+
+# 8b. Parallel orchestration
+
+pait orchestrate --parallel 2
+
+# EXPECT: Up to 2 issues running concurrently
+# EXPECT: [#N] prefixed log lines for each issue
+# EXPECT: All 3 issues complete, PRs created
+# EXPECT: "ALL PARALLEL WORK COMPLETE" at end
+
+# 8c. Parallel ignored in single mode
+
+pait orchestrate --parallel 3 --single
+
+# EXPECT: --single takes precedence, runs only 1 issue sequentially
+
+Phase 8b: Verify idempotency and state file
 
 pait finalize
 

@@ -128,7 +128,7 @@ git push
 
 git log --oneline main -3
 
-# EXPECT: Top commit is the version bump, followed by the squash merge
+# EXPECT: Top commit is the version bump, followed by the merge commit
 
 ## Step 4d: Merge the second PR — this is the critical test
 

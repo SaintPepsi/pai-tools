@@ -53,9 +53,10 @@ import { buildReport } from './report-builder.ts';
 import { parseAnalyzeFlags } from './flags.ts';
 import { consolidateTier3 } from './tier3.ts';
 import type { Tier3Result, IssueData } from './types.ts';
+import { topologicalSort } from '../../shared/graph.ts';
 
 export type { RefactorFlags } from './types.ts';
-export { parseAnalyzeFlags };
+export { parseAnalyzeFlags, topologicalSort };
 
 // ─── Main Orchestrator ──────────────────────────────────────────────────────
 
@@ -203,7 +204,7 @@ export async function analyze(flags: RefactorFlags): Promise<void> {
 			log.step('TIER 3 — CROSS-FILE CONSOLIDATION');
 			const t3Spinner = new Spinner();
 			t3Spinner.start('Consolidating cross-file patterns');
-			tier3 = await consolidateTier3(results, repoRoot);
+			tier3 = await consolidateTier3(flaggedResults, repoRoot);
 			if (tier3) {
 				t3Spinner.stop(`${COLORS.green}[OK]${COLORS.reset} Cross-file consolidation complete`);
 				log.info(tier3.summary);
@@ -335,66 +336,4 @@ export async function analyze(flags: RefactorFlags): Promise<void> {
 	}
 }
 
-// ─── Topological Sort ────────────────────────────────────────────────────────
-
-/**
- * Sort pending issues so that prerequisites appear before their dependents.
- * Falls back to original order for issues without dependencies.
- *
- * Cycle handling: when a back-edge is detected (key already in the `visiting`
- * set), the node that triggered the cycle is appended to the output immediately
- * so it is never silently dropped. This means cycles degrade gracefully to an
- * arbitrary-but-complete ordering rather than losing issues.
- *
- * Exported for unit testing.
- */
-export function topologicalSort(
-	pending: Array<{ issueData: import('./types.ts').IssueData; key: string }>,
-	dependencyMap: Map<string, Set<string>>,
-): Array<{ issueData: import('./types.ts').IssueData; key: string }> {
-	if (dependencyMap.size === 0) return pending;
-
-	const result: typeof pending = [];
-	const inResult = new Set<string>();
-	const visiting = new Set<string>();
-
-	const pendingByKey = new Map(pending.map(p => [p.key, p]));
-
-	function visit(key: string): void {
-		if (inResult.has(key)) return;
-		if (visiting.has(key)) {
-			// Cycle detected — add the node now so it is never silently dropped.
-			// It will appear before its own prerequisites in the output, which
-			// is unavoidable when a genuine cycle exists.
-			if (pendingByKey.has(key)) {
-				result.push(pendingByKey.get(key)!);
-				inResult.add(key);
-			}
-			return;
-		}
-
-		visiting.add(key);
-
-		const prereqs = dependencyMap.get(key);
-		if (prereqs) {
-			for (const prereq of prereqs) {
-				if (pendingByKey.has(prereq)) {
-					visit(prereq);
-				}
-			}
-		}
-
-		visiting.delete(key);
-		if (pendingByKey.has(key) && !inResult.has(key)) {
-			result.push(pendingByKey.get(key)!);
-			inResult.add(key);
-		}
-	}
-
-	for (const { key } of pending) {
-		visit(key);
-	}
-
-	return result;
-}
 

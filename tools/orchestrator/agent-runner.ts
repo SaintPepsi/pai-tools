@@ -9,6 +9,7 @@ import { log, Spinner } from '../../shared/log.ts';
 import { runClaude } from '../../shared/claude.ts';
 import type { RunLogger } from '../../shared/logging.ts';
 import type { GitHubIssue, OrchestratorConfig } from './types.ts';
+import { fixVerificationFailure as _fixVerificationFailure } from './verify-fixer.ts';
 
 export async function assessIssueSize(
 	issue: GitHubIssue,
@@ -118,30 +119,7 @@ export async function fixVerificationFailure(
 	worktreePath: string,
 	logger: RunLogger
 ): Promise<void> {
-	const verifyList = config.verify.map((v) => `- ${v.cmd}`).join('\n');
-	const fixPrompt = `The verification step "${failedStep}" failed for issue #${issueNumber}.
-
-Error output:
-${errorOutput}
-
-Please fix the issues and ensure all verification commands pass:
-${verifyList}
-
-Commit your fixes referencing #${issueNumber}.`;
-
-	const fixSpinner = new Spinner();
-	fixSpinner.start(`Agent fixing verification for #${issueNumber}`);
-
-	const fixResult = await runClaude({
-		prompt: fixPrompt,
-		model: config.models.implement,
-		cwd: worktreePath,
-		permissionMode: 'acceptEdits',
-		allowedTools: config.allowedTools
-	}).catch(() => ({ ok: false, output: '' }));
-
-	fixSpinner.stop();
-	logger.agentOutput(issueNumber, fixResult.output);
+	return _fixVerificationFailure({ issueNumber, failedStep, errorOutput, config, worktreePath, logger });
 }
 
 export async function implementIssue(

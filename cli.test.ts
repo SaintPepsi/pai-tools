@@ -5,7 +5,7 @@ import { join } from 'node:path';
 describe('CLI help text sync', () => {
 	const cliSource = readFileSync(join(import.meta.dir, 'cli.ts'), 'utf-8');
 	const orchestratorSource = readFileSync(
-		join(import.meta.dir, 'tools/orchestrator/index.ts'),
+		join(import.meta.dir, 'tools/orchestrator/flags.ts'),
 		'utf-8'
 	);
 	const analyzeSource = readFileSync(
@@ -137,7 +137,7 @@ describe('Tool README flag sync', () => {
 	}
 
 	const tools = [
-		{ name: 'orchestrator', fn: 'parseFlags', dir: 'tools/orchestrator', file: 'index.ts' },
+		{ name: 'orchestrator', fn: 'parseFlags', dir: 'tools/orchestrator', file: 'flags.ts' },
 		{ name: 'analyze', fn: 'parseAnalyzeFlags', dir: 'tools/analyze', file: 'flags.ts' },
 		{ name: 'verify', fn: 'parseVerifyFlags', dir: 'tools/verify', file: 'index.ts' },
 		{ name: 'finalize', fn: 'parseFinalizeFlags', dir: 'tools/finalize', file: 'index.ts' }

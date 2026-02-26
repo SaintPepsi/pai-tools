@@ -7,16 +7,16 @@
  */
 
 import { log } from '../../shared/log.ts';
-import { Spinner } from '../../shared/log.ts';
 import { RunLogger } from '../../shared/logging.ts';
 import { saveState } from '../../shared/state.ts';
 import { createWorktree, removeWorktree } from '../../shared/git.ts';
 import { createPR } from '../../shared/github.ts';
-import { runClaude } from '../../shared/claude.ts';
 import { runVerify } from '../verify/runner.ts';
 import { implementIssue } from './agent-runner.ts';
+import { fixVerificationFailure } from './verify-fixer.ts';
 import { buildPRBody } from './execution.ts';
 import { getIssueState } from './state-helpers.ts';
+import { withRetries } from './retry.ts';
 import { printStatus } from './display.ts';
 import type {
 	DependencyNode,
@@ -124,102 +124,76 @@ async function processOneIssue(
 	iLog.ok(`Worktree at ${worktreePath} on branch ${node.branch} (base: ${baseBranch})`);
 
 	// Implement (with retries)
-	let implementOk = false;
-	for (let attempt = 0; attempt <= config.retries.implement; attempt++) {
-		if (attempt > 0) {
-			iLog.warn(`Implementation retry ${attempt}/${config.retries.implement}`);
-		}
+	let lastImplError: string | undefined;
+	const implRetryResult = await withRetries(
+		async () => {
+			const r = await implementIssue(node.issue, node.branch, baseBranch, config, worktreePath, logger);
+			if (!r.ok) lastImplError = r.error;
+			return r;
+		},
+		async (attempt) => {
+			iLog.warn(`Implementation retry ${attempt + 1}/${config.retries.implement}`);
+		},
+		config.retries.implement + 1
+	);
 
-		const implResult = await implementIssue(node.issue, node.branch, baseBranch, config, worktreePath, logger);
-		if (implResult.ok) {
-			implementOk = true;
-			break;
-		}
-
-		iLog.error(`Implementation attempt ${attempt + 1} failed: ${implResult.error}`);
-
-		if (attempt === config.retries.implement) {
-			const errMsg = `Implementation failed after ${config.retries.implement + 1} attempts: ${implResult.error}`;
-			await safeUpdateState((s) => {
-				const is = getIssueState(s, issueNum, node.issue.title);
-				is.status = 'failed';
-				is.error = errMsg;
-			});
-			logger.issueFailed(issueNum, errMsg);
-			await removeWorktree(worktreePath, node.branch, repoRoot, logger, issueNum);
-			return;
-		}
-	}
-
-	if (!implementOk) {
+	if (!implRetryResult.ok) {
+		iLog.error(`Implementation attempt failed: ${lastImplError}`);
+		const errMsg = `Implementation failed after ${config.retries.implement + 1} attempts: ${lastImplError}`;
+		await safeUpdateState((s) => {
+			const is = getIssueState(s, issueNum, node.issue.title);
+			is.status = 'failed';
+			is.error = errMsg;
+		});
+		logger.issueFailed(issueNum, errMsg);
 		await removeWorktree(worktreePath, node.branch, repoRoot, logger, issueNum);
 		return;
 	}
 
 	// Verify (with retries and fix attempts)
 	iLog.info('Running verification pipeline...');
-	let verifyOk = false;
-	for (let attempt = 0; attempt <= config.retries.verify; attempt++) {
-		if (attempt > 0) {
-			iLog.warn(`Verification retry ${attempt}/${config.retries.verify} — feeding errors back to agent`);
-		}
-
-		const verifyResult = await runVerify({
-			verify: config.verify,
-			e2e: config.e2e,
-			cwd: worktreePath,
-			skipE2e: flags.skipE2e,
-			logger,
-			issueNumber: issueNum
-		});
-		if (verifyResult.ok) {
-			verifyOk = true;
-			break;
-		}
-
-		if (!verifyResult.ok && verifyResult.failedStep) {
-			iLog.error(`Verification failed at ${verifyResult.failedStep}`);
-
-			if (attempt < config.retries.verify) {
-				const verifyList = config.verify.map((v) => `- ${v.cmd}`).join('\n');
-				const fixPrompt = `The verification step "${verifyResult.failedStep}" failed for issue #${issueNum}.
-
-Error output:
-${verifyResult.error}
-
-Please fix the issues and ensure all verification commands pass:
-${verifyList}
-
-Commit your fixes referencing #${issueNum}.`;
-
-				const fixSpinner = new Spinner();
-				fixSpinner.start(`[#${issueNum}] Agent fixing verification`);
-
-				const fixResult = await runClaude({
-					prompt: fixPrompt,
-					model: config.models.implement,
-					cwd: worktreePath,
-					permissionMode: 'acceptEdits',
-					allowedTools: config.allowedTools
-				}).catch(() => ({ ok: false, output: '' }));
-
-				fixSpinner.stop();
-				logger.agentOutput(issueNum, fixResult.output);
-			} else {
-				const errMsg = `Verification failed at ${verifyResult.failedStep} after ${config.retries.verify + 1} attempts: ${verifyResult.error}`;
-				await safeUpdateState((s) => {
-					const is = getIssueState(s, issueNum, node.issue.title);
-					is.status = 'failed';
-					is.error = errMsg;
+	let lastVerifyResult: Awaited<ReturnType<typeof runVerify>> | undefined;
+	const verifyRetryResult = await withRetries(
+		async () => {
+			const r = await runVerify({
+				verify: config.verify,
+				e2e: config.e2e,
+				cwd: worktreePath,
+				skipE2e: flags.skipE2e,
+				logger,
+				issueNumber: issueNum
+			});
+			lastVerifyResult = r;
+			return r;
+		},
+		async (attempt) => {
+			const failedStep = lastVerifyResult?.failedStep;
+			if (failedStep) {
+				iLog.error(`Verification failed at ${failedStep}`);
+				iLog.warn(`Verification retry ${attempt + 1}/${config.retries.verify} — feeding errors back to agent`);
+				await fixVerificationFailure({
+					issueNumber: issueNum,
+					failedStep,
+					errorOutput: lastVerifyResult?.error ?? '',
+					config,
+					worktreePath,
+					logger,
+					spinnerLabel: `[#${issueNum}] Agent fixing verification`
 				});
-				logger.issueFailed(issueNum, errMsg);
-				await removeWorktree(worktreePath, node.branch, repoRoot, logger, issueNum);
-				return;
 			}
-		}
-	}
+		},
+		config.retries.verify + 1
+	);
 
-	if (!verifyOk) {
+	if (!verifyRetryResult.ok) {
+		const failedStep = lastVerifyResult?.failedStep ?? 'unknown';
+		const errMsg = `Verification failed at ${failedStep} after ${config.retries.verify + 1} attempts: ${lastVerifyResult?.error}`;
+		await safeUpdateState((s) => {
+			const is = getIssueState(s, issueNum, node.issue.title);
+			is.status = 'failed';
+			is.error = errMsg;
+		});
+		logger.issueFailed(issueNum, errMsg);
 		await removeWorktree(worktreePath, node.branch, repoRoot, logger, issueNum);
 		return;
 	}

@@ -6,12 +6,11 @@
  * each via Claude agents with full verification.
  */
 
-import { unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { log } from '../../shared/log.ts';
 import { RunLogger } from '../../shared/logging.ts';
 import { findRepoRoot, loadToolConfig, saveToolConfig, getStateFilePath, migrateStateIfNeeded } from '../../shared/config.ts';
-import { loadState } from '../../shared/state.ts';
+import { loadState, clearState } from '../../shared/state.ts';
 import { fetchOpenIssues } from '../../shared/github.ts';
 import { buildGraph, topologicalSort, computeTiers } from './dependency-graph.ts';
 import { printExecutionPlan, printStatus, printParallelPlan } from './display.ts';
@@ -30,7 +29,7 @@ import type {
 // Re-exports (backward compatibility)
 // ---------------------------------------------------------------------------
 
-export { loadState, saveState } from '../../shared/state.ts';
+export { loadState, saveState, clearState } from '../../shared/state.ts';
 export { localBranchExists, deleteLocalBranch, createWorktree, removeWorktree } from '../../shared/git.ts';
 export { parseDependencies, toKebabSlug, buildGraph, topologicalSort, computeTiers } from './dependency-graph.ts';
 export { assessIssueSize, buildImplementationPrompt, fixVerificationFailure, implementIssue } from './agent-runner.ts';
@@ -41,57 +40,10 @@ export { runDryRun } from './dry-run.ts';
 export { initState, getIssueState } from './state-helpers.ts';
 
 // ---------------------------------------------------------------------------
-// Flag parsing
+// Flag parsing (re-export for backward compatibility)
 // ---------------------------------------------------------------------------
 
-export function parseFlags(args: string[]): OrchestratorFlags {
-
-	const singleIssue = (() => {
-		const idx = args.indexOf('--single');
-		if (idx === -1) return null;
-		const next = args[idx + 1];
-		if (next && !next.startsWith('--')) {
-			const val = Number(next);
-			if (!Number.isNaN(val)) return val;
-		}
-		return null;
-	})();
-
-	const fromIssue = (() => {
-		const idx = args.indexOf('--from');
-		if (idx === -1) return null;
-		const val = Number(args[idx + 1]);
-		if (Number.isNaN(val)) {
-			console.error('--from requires a valid issue number');
-			process.exit(1);
-		}
-		return val;
-	})();
-
-	const parallel = (() => {
-		const idx = args.indexOf('--parallel');
-		if (idx === -1) return 1;
-		const val = Number(args[idx + 1]);
-		if (Number.isNaN(val) || val < 1) {
-			console.error('--parallel requires a positive integer (e.g. --parallel 3)');
-			process.exit(1);
-		}
-		return val;
-	})();
-
-	return {
-		dryRun: args.includes('--dry-run'),
-		reset: args.includes('--reset'),
-		statusOnly: args.includes('--status'),
-		skipE2e: args.includes('--skip-e2e'),
-		skipSplit: args.includes('--skip-split'),
-		noVerify: args.includes('--no-verify'),
-		singleMode: args.includes('--single'),
-		singleIssue,
-		fromIssue,
-		parallel
-	};
-}
+export { parseFlags } from './flags.ts';
 
 // ---------------------------------------------------------------------------
 // Entry point
@@ -112,11 +64,7 @@ export async function orchestrate(flags: OrchestratorFlags): Promise<void> {
 
 	// Handle --reset
 	if (flags.reset) {
-		try {
-			unlinkSync(stateFile);
-		} catch {
-			/* ignore */
-		}
+		clearState(repoRoot, 'orchestrator');
 		log.ok('State cleared');
 		const hasOtherFlags = flags.dryRun || flags.statusOnly || flags.singleMode || flags.fromIssue !== null;
 		if (!hasOtherFlags) return;

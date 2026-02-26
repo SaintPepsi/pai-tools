@@ -14,6 +14,7 @@ import { runVerify } from '../verify/index.ts';
 import { assessIssueSize, implementIssue, fixVerificationFailure } from './agent-runner.ts';
 import { printExecutionPlan, printStatus } from './display.ts';
 import { getIssueState } from './state-helpers.ts';
+import { withRetries } from './retry.ts';
 import type {
 	GitHubIssue,
 	DependencyNode,
@@ -211,86 +212,75 @@ export async function runMainLoop(
 		log.ok(`Worktree at ${worktreePath} on branch ${node.branch} (base: ${baseBranch})`);
 
 		// Implement (inside worktree)
-		let implementOk = false;
-		for (let attempt = 0; attempt <= config.retries.implement; attempt++) {
-			if (attempt > 0) {
-				log.warn(`Implementation retry ${attempt}/${config.retries.implement}`);
-			}
+		let lastImplError: string | undefined;
+		const implRetryResult = await withRetries(
+			async () => {
+				const r = await implementIssue(node.issue, node.branch, baseBranch, config, worktreePath, logger);
+				if (!r.ok) lastImplError = r.error;
+				return r;
+			},
+			async (attempt) => {
+				log.warn(`Implementation retry ${attempt + 1}/${config.retries.implement}`);
+			},
+			config.retries.implement + 1
+		);
 
-			const implResult = await implementIssue(node.issue, node.branch, baseBranch, config, worktreePath, logger);
-			if (implResult.ok) {
-				implementOk = true;
-				break;
-			}
-
-			log.error(`Implementation attempt ${attempt + 1} failed: ${implResult.error}`);
-
-			if (attempt === config.retries.implement) {
-				issueState.status = 'failed';
-				issueState.error = `Implementation failed after ${config.retries.implement + 1} attempts: ${implResult.error}`;
-				saveState(state, stateFile);
-				logger.issueFailed(issueNum, issueState.error);
-				await removeWorktree(worktreePath, node.branch, repoRoot, logger, issueNum);
-				log.error('HALTING — implementation failed');
-				process.exit(1);
-			}
-		}
-
-		if (!implementOk) {
+		if (!implRetryResult.ok) {
+			log.error(`Implementation attempt failed: ${lastImplError}`);
+			issueState.status = 'failed';
+			issueState.error = `Implementation failed after ${config.retries.implement + 1} attempts: ${lastImplError}`;
+			saveState(state, stateFile);
+			logger.issueFailed(issueNum, issueState.error);
 			await removeWorktree(worktreePath, node.branch, repoRoot, logger, issueNum);
-			continue;
+			log.error('HALTING — implementation failed');
+			process.exit(1);
 		}
 
 		// Verify (inside worktree)
 		log.info('Running verification pipeline...');
-		let verifyOk = false;
-		for (let attempt = 0; attempt <= config.retries.verify; attempt++) {
-			if (attempt > 0) {
-				log.warn(
-					`Verification retry ${attempt}/${config.retries.verify} — feeding errors back to agent`
-				);
-			}
-
-			const verifyResult = await runVerify({
-				verify: config.verify,
-				e2e: config.e2e,
-				cwd: worktreePath,
-				skipE2e: flags.skipE2e,
-				logger,
-				issueNumber: issueNum
-			});
-			if (verifyResult.ok) {
-				verifyOk = true;
-				break;
-			}
-
-			if (!verifyResult.ok && verifyResult.failedStep) {
-				log.error(`Verification failed at ${verifyResult.failedStep}`);
-
-				if (attempt < config.retries.verify) {
+		let lastVerifyResult: Awaited<ReturnType<typeof runVerify>> | undefined;
+		const verifyRetryResult = await withRetries(
+			async () => {
+				const r = await runVerify({
+					verify: config.verify,
+					e2e: config.e2e,
+					cwd: worktreePath,
+					skipE2e: flags.skipE2e,
+					logger,
+					issueNumber: issueNum
+				});
+				lastVerifyResult = r;
+				return r;
+			},
+			async (attempt) => {
+				const failedStep = lastVerifyResult?.failedStep;
+				if (failedStep) {
+					log.error(`Verification failed at ${failedStep}`);
+					log.warn(
+						`Verification retry ${attempt + 1}/${config.retries.verify} — feeding errors back to agent`
+					);
 					await fixVerificationFailure(
 						issueNum,
-						verifyResult.failedStep,
-						verifyResult.error ?? '',
+						failedStep,
+						lastVerifyResult?.error ?? '',
 						config,
 						worktreePath,
 						logger
 					);
-				} else {
-					issueState.status = 'failed';
-					issueState.error = `Verification failed at ${verifyResult.failedStep} after ${config.retries.verify + 1} attempts: ${verifyResult.error}`;
-					saveState(state, stateFile);
-					logger.issueFailed(issueNum, issueState.error);
-					await removeWorktree(worktreePath, node.branch, repoRoot, logger, issueNum);
-					log.error('HALTING — verification failed');
-					process.exit(1);
 				}
-			}
-		}
+			},
+			config.retries.verify + 1
+		);
 
-		if (!verifyOk) {
+		if (!verifyRetryResult.ok) {
+			const failedStep = lastVerifyResult?.failedStep ?? 'unknown';
+			issueState.status = 'failed';
+			issueState.error = `Verification failed at ${failedStep} after ${config.retries.verify + 1} attempts: ${lastVerifyResult?.error}`;
+			saveState(state, stateFile);
+			logger.issueFailed(issueNum, issueState.error);
 			await removeWorktree(worktreePath, node.branch, repoRoot, logger, issueNum);
-			continue;
+			log.error('HALTING — verification failed');
+			process.exit(1);
 		}
 
 		log.ok('All verification gates passed');

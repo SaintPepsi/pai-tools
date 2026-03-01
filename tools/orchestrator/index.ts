@@ -12,6 +12,7 @@ import { RunLogger } from '../../shared/logging.ts';
 import { findRepoRoot, loadToolConfig, saveToolConfig, getStateFilePath, migrateStateIfNeeded } from '../../shared/config.ts';
 import { loadState, clearState } from '../../shared/state.ts';
 import { fetchOpenIssues } from '../../shared/github.ts';
+import { parseMarkdownTasks } from './markdown-source.ts';
 import { buildGraph, topologicalSort, computeTiers } from './dependency-graph.ts';
 import { printExecutionPlan, printStatus, printParallelPlan } from './display.ts';
 import { promptForVerifyCommands } from './prompt.ts';
@@ -32,6 +33,7 @@ import type {
 export { loadState, saveState, clearState } from '../../shared/state.ts';
 export { localBranchExists, deleteLocalBranch, createWorktree, removeWorktree } from '../../shared/git.ts';
 export { parseDependencies, toKebabSlug, buildGraph, topologicalSort, computeTiers } from './dependency-graph.ts';
+export { parseMarkdownTasks } from './markdown-source.ts';
 export { assessIssueSize, buildImplementationPrompt, fixVerificationFailure, implementIssue } from './agent-runner.ts';
 export { printExecutionPlan, printStatus, printParallelPlan } from './display.ts';
 export { runParallelLoop } from './parallel.ts';
@@ -95,10 +97,19 @@ export async function orchestrate(flags: OrchestratorFlags): Promise<void> {
 		log.ok(`Saved ${commands.length} verification step(s) to .pait/orchestrator.json`);
 	}
 
-	// Fetch issues and build graph
-	log.step('FETCHING ISSUES');
-	const issues = await fetchOpenIssues(config.allowedAuthors);
-	log.ok(`Fetched ${issues.length} open issues`);
+	// Fetch issues (from GitHub or markdown file)
+	const issues = await (async () => {
+		if (flags.file) {
+			log.step(`READING TASKS FROM ${flags.file}`);
+			const tasks = parseMarkdownTasks(flags.file);
+			log.ok(`Parsed ${tasks.length} open tasks from markdown`);
+			return tasks;
+		}
+		log.step('FETCHING ISSUES');
+		const ghIssues = await fetchOpenIssues(config.allowedAuthors);
+		log.ok(`Fetched ${ghIssues.length} open issues`);
+		return ghIssues;
+	})();
 
 	const graph = buildGraph(issues, config);
 	const executionOrder = topologicalSort(graph);

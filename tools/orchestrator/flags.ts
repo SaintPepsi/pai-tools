@@ -39,6 +39,17 @@ export function parseFlags(args: string[]): OrchestratorFlags {
 		return val;
 	})();
 
+	const file = (() => {
+		const idx = args.indexOf('--file');
+		if (idx === -1) return null;
+		const val = args[idx + 1];
+		if (!val || val.startsWith('--')) {
+			console.error('--file requires a path (e.g. --file MIGRATION.md)');
+			process.exit(1);
+		}
+		return val;
+	})();
+
 	return {
 		dryRun: args.includes('--dry-run'),
 		reset: args.includes('--reset'),
@@ -49,6 +60,7 @@ export function parseFlags(args: string[]): OrchestratorFlags {
 		singleMode: args.includes('--single'),
 		singleIssue,
 		fromIssue,
-		parallel
+		parallel,
+		file
 	};
 }

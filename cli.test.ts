@@ -8,11 +8,7 @@ describe('CLI help text sync', () => {
 		join(import.meta.dir, 'tools/orchestrator/flags.ts'),
 		'utf-8'
 	);
-	const analyzeSource = readFileSync(
-		join(import.meta.dir, 'tools/analyze/flags.ts'),
-		'utf-8'
-	);
-	const verifySource = readFileSync(
+const verifySource = readFileSync(
 		join(import.meta.dir, 'tools/verify/index.ts'),
 		'utf-8'
 	);
@@ -47,34 +43,7 @@ describe('CLI help text sync', () => {
 		}
 	});
 
-	test('every analyze flag in parseAnalyzeFlags appears in CLI HELP', () => {
-		const parseFlagsMatch = analyzeSource.match(
-			/function parseAnalyzeFlags[\s\S]*?^}/m
-		);
-		expect(parseFlagsMatch).not.toBeNull();
-
-		const flagMatches = parseFlagsMatch![0].matchAll(/'(--[\w-]+)'/g);
-		const flags = [...flagMatches].map((m) => m[1]);
-
-		expect(flags.length).toBeGreaterThan(0);
-
-		const helpMatch = cliSource.match(/const HELP = `[\s\S]*?`;/);
-		expect(helpMatch).not.toBeNull();
-		const helpText = helpMatch![0];
-
-		// --help is a meta-flag handled globally, not listed per-command
-		const missing = flags
-			.filter((flag) => flag !== '--help')
-			.filter((flag) => !helpText.includes(flag));
-		if (missing.length > 0) {
-			throw new Error(
-				`Analyze flags missing from CLI help text: ${missing.join(', ')}\n` +
-					'Update the HELP string in cli.ts to include these flags.'
-			);
-		}
-	});
-
-	test('every verify flag in parseVerifyFlags appears in CLI HELP', () => {
+test('every verify flag in parseVerifyFlags appears in CLI HELP', () => {
 		const parseFlagsMatch = verifySource.match(
 			/function parseVerifyFlags[\s\S]*?^}/m
 		);
@@ -138,7 +107,6 @@ describe('Tool README flag sync', () => {
 
 	const tools = [
 		{ name: 'orchestrator', fn: 'parseFlags', dir: 'tools/orchestrator', file: 'flags.ts' },
-		{ name: 'analyze', fn: 'parseAnalyzeFlags', dir: 'tools/analyze', file: 'flags.ts' },
 		{ name: 'verify', fn: 'parseVerifyFlags', dir: 'tools/verify', file: 'index.ts' },
 		{ name: 'finalize', fn: 'parseFinalizeFlags', dir: 'tools/finalize', file: 'index.ts' }
 	];

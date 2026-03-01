@@ -5,10 +5,10 @@
  * with GitHub issues or PRs via the gh CLI.
  */
 
-import { $ } from 'bun';
-import { existsSync, readFileSync } from 'node:fs';
 import { log } from './log.ts';
 import { getStateFilePath } from './config.ts';
+import type { FsAdapter } from './adapters/fs.ts';
+import { defaultFsAdapter } from './adapters/fs.ts';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -32,13 +32,47 @@ export interface MergeOrder {
 }
 
 // ---------------------------------------------------------------------------
+// Dependency injection
+// ---------------------------------------------------------------------------
+
+export interface GithubDeps {
+	/** Run a shell command, returning exit code + captured stdout/stderr. */
+	exec: (cmd: string[]) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
+	/** Filesystem operations. */
+	fs: FsAdapter;
+	/** Sleep for the given number of milliseconds. */
+	sleep: (ms: number) => Promise<void>;
+}
+
+async function defaultExec(cmd: string[]) {
+	const proc = Bun.spawnSync(cmd);
+	return {
+		exitCode: proc.exitCode ?? 1,
+		stdout: proc.stdout?.toString() ?? '',
+		stderr: proc.stderr?.toString() ?? '',
+	};
+}
+
+const defaultDeps: GithubDeps = {
+	exec: defaultExec,
+	fs: defaultFsAdapter,
+	sleep: Bun.sleep,
+};
+
+export const defaultGithubDeps: GithubDeps = defaultDeps;
+
+// ---------------------------------------------------------------------------
 // Issue operations
 // ---------------------------------------------------------------------------
 
-export async function fetchOpenIssues(allowedAuthors?: string[]): Promise<GitHubIssue[]> {
-	const authors = allowedAuthors?.length
-		? allowedAuthors
-		: [(await $`gh api user --jq .login`.text()).trim()];
+export async function fetchOpenIssues(allowedAuthors?: string[], deps: GithubDeps = defaultDeps): Promise<GitHubIssue[]> {
+	let authors: string[];
+	if (allowedAuthors?.length) {
+		authors = allowedAuthors;
+	} else {
+		const r = await deps.exec(['gh', 'api', 'user', '--jq', '.login']);
+		authors = [r.stdout.trim()];
+	}
 
 	log.info(`Filtering issues by author(s): ${authors.join(', ')}`);
 
@@ -46,9 +80,14 @@ export async function fetchOpenIssues(allowedAuthors?: string[]): Promise<GitHub
 	const issues: GitHubIssue[] = [];
 
 	for (const author of authors) {
-		const result =
-			await $`gh issue list --state open --limit 200 --author ${author} --json number,title,body,state,labels`.text();
-		for (const issue of JSON.parse(result) as GitHubIssue[]) {
+		const r = await deps.exec([
+			'gh', 'issue', 'list',
+			'--state', 'open',
+			'--limit', '200',
+			'--author', author,
+			'--json', 'number,title,body,state,labels',
+		]);
+		for (const issue of JSON.parse(r.stdout) as GitHubIssue[]) {
 			if (!seen.has(issue.number)) {
 				seen.add(issue.number);
 				issues.push(issue);
@@ -62,32 +101,30 @@ export async function fetchOpenIssues(allowedAuthors?: string[]): Promise<GitHub
 export async function createSubIssues(
 	parentIssue: GitHubIssue,
 	splits: { title: string; body: string }[],
-	parentDeps: number[]
+	parentDeps: number[],
+	deps: GithubDeps = defaultDeps
 ): Promise<number[]> {
 	const createdNumbers: number[] = [];
 	let previousSubIssue: number | null = null;
 
 	for (const split of splits) {
-		const deps: number[] =
+		const issueDeps: number[] =
 			previousSubIssue !== null
 				? [previousSubIssue]
 				: parentDeps.filter((d: number) => d !== parentIssue.number);
 
 		const depsLine: string =
-			deps.length > 0 ? `> **Depends on:** ${deps.map((d: number) => `#${d}`).join(', ')}\n\n` : '';
+			issueDeps.length > 0 ? `> **Depends on:** ${issueDeps.map((d: number) => `#${d}`).join(', ')}\n\n` : '';
 
 		const issueBody: string = `${depsLine}> **Part of** #${parentIssue.number}\n\n${split.body}`;
-		const title: string = split.title;
 
-		const result: string = (
-			await $`gh issue create --title ${title} --body ${issueBody}`.text()
-		).trim();
-		const match: RegExpMatchArray | null = result.match(/(\d+)$/);
+		const r = await deps.exec(['gh', 'issue', 'create', '--title', split.title, '--body', issueBody]);
+		const match: RegExpMatchArray | null = r.stdout.trim().match(/(\d+)$/);
 		if (match) {
 			const num: number = Number(match[1]);
 			createdNumbers.push(num);
 			previousSubIssue = num;
-			log.ok(`Created sub-issue #${num}: ${title}`);
+			log.ok(`Created sub-issue #${num}: ${split.title}`);
 		}
 	}
 
@@ -103,24 +140,29 @@ export async function createPR(
 	body: string,
 	baseBranch: string,
 	branchName: string,
-	worktreePath: string
+	worktreePath: string,
+	deps: GithubDeps = defaultDeps
 ): Promise<{ ok: boolean; prNumber?: number; error?: string }> {
-	try {
-		await $`git -C ${worktreePath} push -u origin ${branchName}`.quiet();
-	} catch (err) {
-		return { ok: false, error: `Failed to push branch: ${err}` };
+	const push = await deps.exec(['git', '-C', worktreePath, 'push', '-u', 'origin', branchName]);
+	if (push.exitCode !== 0) {
+		return { ok: false, error: `Failed to push branch: ${push.stderr}` };
 	}
 
-	try {
-		const result =
-			await $`gh pr create --title ${title} --body ${body} --base ${baseBranch} --head ${branchName}`.text();
-		const match = result.match(/(\d+)/);
-		const prNumber = match ? Number(match[1]) : undefined;
-		log.ok(`PR created: ${result.trim()}`);
-		return { ok: true, prNumber };
-	} catch (err) {
-		return { ok: false, error: `Failed to create PR: ${err}` };
+	const pr = await deps.exec([
+		'gh', 'pr', 'create',
+		'--title', title,
+		'--body', body,
+		'--base', baseBranch,
+		'--head', branchName,
+	]);
+	if (pr.exitCode !== 0) {
+		return { ok: false, error: `Failed to create PR: ${pr.stderr}` };
 	}
+
+	const match = pr.stdout.match(/(\d+)/);
+	const prNumber = match ? Number(match[1]) : undefined;
+	log.ok(`PR created: ${pr.stdout.trim()}`);
+	return { ok: true, prNumber };
 }
 
 export function determineMergeOrder(prs: MergeOrder[]): MergeOrder[] {
@@ -166,14 +208,14 @@ export function determineMergeOrder(prs: MergeOrder[]): MergeOrder[] {
 	return result;
 }
 
-export async function discoverMergeablePRs(repoRoot: string): Promise<MergeOrder[]> {
+export async function discoverMergeablePRs(repoRoot: string, deps: GithubDeps = defaultDeps): Promise<MergeOrder[]> {
 	const stateFile = getStateFilePath(repoRoot, 'orchestrator');
-	if (!existsSync(stateFile)) {
+	if (!deps.fs.fileExists(stateFile)) {
 		log.error('No orchestrator state found. Run `pait orchestrate` first.');
 		return [];
 	}
 
-	const raw = readFileSync(stateFile, 'utf-8');
+	const raw = deps.fs.readFile(stateFile);
 
 	interface OrchestratorIssueState {
 		number: number;
@@ -194,14 +236,8 @@ export async function discoverMergeablePRs(repoRoot: string): Promise<MergeOrder
 		if (issue.status !== 'completed' || !issue.prNumber || !issue.branch) continue;
 
 		// Check if PR is still open
-		try {
-			const prState = (
-				await $`gh pr view ${issue.prNumber} --json state --jq .state`.text()
-			).trim();
-			if (prState !== 'OPEN') continue;
-		} catch {
-			continue;
-		}
+		const r = await deps.exec(['gh', 'pr', 'view', String(issue.prNumber), '--json', 'state', '--jq', '.state']);
+		if (r.exitCode !== 0 || r.stdout.trim() !== 'OPEN') continue;
 
 		prs.push({
 			issueNumber: issue.number,
@@ -217,7 +253,8 @@ export async function discoverMergeablePRs(repoRoot: string): Promise<MergeOrder
 export async function mergePR(
 	prNumber: number,
 	strategy: MergeStrategy,
-	dryRun: boolean
+	dryRun: boolean,
+	deps: GithubDeps = defaultDeps
 ): Promise<{ ok: boolean; error?: string }> {
 	if (dryRun) {
 		log.info(`[DRY RUN] Would merge PR #${prNumber} with --${strategy}`);
@@ -225,18 +262,15 @@ export async function mergePR(
 	}
 
 	// Retry once — GitHub may need a moment to process a force-push before merge
-	for (let attempt = 0; attempt < 2; attempt++) {
-		try {
-			await $`gh pr merge ${prNumber} --${strategy} --delete-branch`.quiet();
-			return { ok: true };
-		} catch (err) {
-			if (attempt === 0) {
-				log.info('Merge failed, retrying in 3s (GitHub may still be processing)...');
-				await Bun.sleep(3000);
-			} else {
-				return { ok: false, error: String(err) };
-			}
-		}
+	const first = await deps.exec(['gh', 'pr', 'merge', String(prNumber), `--${strategy}`, '--delete-branch']);
+	if (first.exitCode === 0) {
+		return { ok: true };
 	}
-	return { ok: false, error: 'Unreachable' };
+	log.info('Merge failed, retrying in 3s (GitHub may still be processing)...');
+	await deps.sleep(3000);
+	const second = await deps.exec(['gh', 'pr', 'merge', String(prNumber), `--${strategy}`, '--delete-branch']);
+	if (second.exitCode === 0) {
+		return { ok: true };
+	}
+	return { ok: false, error: second.stderr };
 }

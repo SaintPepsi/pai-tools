@@ -1,8 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { $ } from 'bun';
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import {
 	localBranchExists,
 	deleteLocalBranch,
@@ -11,21 +8,20 @@ import {
 } from './git.ts';
 
 describe('shared/git — branch operations', () => {
-	let tempDir: string;
 	let repoRoot: string;
+	let tmpDir: string;
 
 	beforeEach(async () => {
-		tempDir = mkdtempSync(join(tmpdir(), 'pai-git-shared-test-'));
-		repoRoot = join(tempDir, 'repo');
-		mkdirSync(repoRoot);
-
+		tmpDir = (await $`mktemp -d`.text()).trim();
+		repoRoot = `${tmpDir}/repo`;
+		await $`mkdir -p ${repoRoot}`.quiet();
 		await $`git -C ${repoRoot} init`.quiet();
 		await $`git -C ${repoRoot} checkout -b main`.quiet();
 		await $`git -C ${repoRoot} commit --allow-empty -m "initial"`.quiet();
 	});
 
-	afterEach(() => {
-		rmSync(tempDir, { recursive: true, force: true });
+	afterEach(async () => {
+		await $`rm -rf ${tmpDir}`.quiet();
 	});
 
 	test('localBranchExists returns true for existing branch', async () => {
@@ -51,23 +47,22 @@ describe('shared/git — branch operations', () => {
 });
 
 describe('shared/git — rebase operations', () => {
-	let tempDir: string;
 	let repoRoot: string;
+	let tmpDir: string;
 
 	beforeEach(async () => {
-		tempDir = mkdtempSync(join(tmpdir(), 'pai-git-rebase-test-'));
-		repoRoot = join(tempDir, 'repo');
-		mkdirSync(repoRoot);
-
+		tmpDir = (await $`mktemp -d`.text()).trim();
+		repoRoot = `${tmpDir}/repo`;
+		await $`mkdir -p ${repoRoot}`.quiet();
 		await $`git -C ${repoRoot} init`.quiet();
 		await $`git -C ${repoRoot} checkout -b main`.quiet();
-		writeFileSync(join(repoRoot, 'README.md'), 'initial\n');
+		await Bun.write(`${repoRoot}/README.md`, 'initial\n');
 		await $`git -C ${repoRoot} add README.md`.quiet();
 		await $`git -C ${repoRoot} commit -m "initial"`.quiet();
 	});
 
-	afterEach(() => {
-		rmSync(tempDir, { recursive: true, force: true });
+	afterEach(async () => {
+		await $`rm -rf ${tmpDir}`.quiet();
 	});
 
 	test('detectConflicts returns empty array when no conflicts', async () => {
@@ -77,7 +72,7 @@ describe('shared/git — rebase operations', () => {
 
 	test('rebaseBranch succeeds with no divergence', async () => {
 		await $`git -C ${repoRoot} checkout -b feat/clean`.quiet();
-		writeFileSync(join(repoRoot, 'feature.txt'), 'feature\n');
+		await Bun.write(`${repoRoot}/feature.txt`, 'feature\n');
 		await $`git -C ${repoRoot} add feature.txt`.quiet();
 		await $`git -C ${repoRoot} commit -m "feature"`.quiet();
 
@@ -88,12 +83,12 @@ describe('shared/git — rebase operations', () => {
 
 	test('rebaseBranch detects conflicts', async () => {
 		await $`git -C ${repoRoot} checkout -b feat/conflict`.quiet();
-		writeFileSync(join(repoRoot, 'README.md'), 'feature version\n');
+		await Bun.write(`${repoRoot}/README.md`, 'feature version\n');
 		await $`git -C ${repoRoot} add README.md`.quiet();
 		await $`git -C ${repoRoot} commit -m "feature change"`.quiet();
 
 		await $`git -C ${repoRoot} checkout main`.quiet();
-		writeFileSync(join(repoRoot, 'README.md'), 'main version\n');
+		await Bun.write(`${repoRoot}/README.md`, 'main version\n');
 		await $`git -C ${repoRoot} add README.md`.quiet();
 		await $`git -C ${repoRoot} commit -m "main change"`.quiet();
 

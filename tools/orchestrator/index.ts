@@ -12,7 +12,7 @@ import { RunLogger } from '../../shared/logging.ts';
 import { findRepoRoot, loadToolConfig, saveToolConfig, getStateFilePath, migrateStateIfNeeded } from '../../shared/config.ts';
 import { loadState, clearState } from '../../shared/state.ts';
 import { fetchOpenIssues } from '../../shared/github.ts';
-import { parseMarkdownTasks } from './markdown-source.ts';
+import { parseMarkdownContent } from './markdown-source.ts';
 import { buildGraph, topologicalSort, computeTiers } from './dependency-graph.ts';
 import { printExecutionPlan, printStatus, printParallelPlan } from './display.ts';
 import { promptForVerifyCommands } from './prompt.ts';
@@ -33,7 +33,7 @@ import type {
 export { loadState, saveState, clearState } from '../../shared/state.ts';
 export { localBranchExists, deleteLocalBranch, createWorktree, removeWorktree } from '../../shared/git.ts';
 export { parseDependencies, toKebabSlug, buildGraph, topologicalSort, computeTiers } from './dependency-graph.ts';
-export { parseMarkdownTasks } from './markdown-source.ts';
+export { parseMarkdownContent } from './markdown-source.ts';
 export { assessIssueSize, buildImplementationPrompt, fixVerificationFailure, implementIssue } from './agent-runner.ts';
 export { printExecutionPlan, printStatus, printParallelPlan } from './display.ts';
 export { runParallelLoop } from './parallel.ts';
@@ -101,7 +101,8 @@ export async function orchestrate(flags: OrchestratorFlags): Promise<void> {
 	const issues = await (async () => {
 		if (flags.file) {
 			log.step(`READING TASKS FROM ${flags.file}`);
-			const tasks = parseMarkdownTasks(flags.file);
+			const content = await Bun.file(flags.file).text();
+			const tasks = parseMarkdownContent(content);
 			log.ok(`Parsed ${tasks.length} open tasks from markdown`);
 			return tasks;
 		}

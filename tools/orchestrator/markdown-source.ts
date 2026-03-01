@@ -1,7 +1,7 @@
 /**
  * Markdown checklist → GitHubIssue[] adapter.
  *
- * Parses a markdown file with checkbox items and converts unchecked items
+ * Parses markdown content with checkbox items and converts unchecked items
  * into GitHubIssue-compatible objects that the orchestrator can process.
  *
  * Supported format:
@@ -16,7 +16,6 @@
  * items are returned. This lets deps reference completed items without breaking.
  */
 
-import { readFileSync } from 'node:fs';
 import type { GitHubIssue } from '../../shared/github.ts';
 
 interface ParsedItem {
@@ -28,8 +27,11 @@ interface ParsedItem {
 	subSection: string;
 }
 
-export function parseMarkdownTasks(filePath: string): GitHubIssue[] {
-	const content = readFileSync(filePath, 'utf-8');
+/**
+ * Parse markdown content string into GitHubIssue-compatible objects.
+ * Pure function — no I/O.
+ */
+export function parseMarkdownContent(content: string): GitHubIssue[] {
 	const lines = content.split('\n');
 
 	const items: ParsedItem[] = [];

@@ -29,7 +29,7 @@ import type {
 // Mutex — serializes state file writes to prevent race conditions
 // ---------------------------------------------------------------------------
 
-class Mutex {
+export class Mutex {
 	private chain: Promise<void> = Promise.resolve();
 
 	run<T>(fn: () => Promise<T>): Promise<T> {
@@ -47,7 +47,7 @@ class Mutex {
 // Per-issue logger (prefixes all output with [#N])
 // ---------------------------------------------------------------------------
 
-type IssueLogger = {
+export type IssueLogger = {
 	info(msg: string): void;
 	ok(msg: string): void;
 	warn(msg: string): void;
@@ -56,37 +56,122 @@ type IssueLogger = {
 	dim(msg: string): void;
 };
 
-function makeIssueLog(issueNum: number): IssueLogger {
+export function makeIssueLog(issueNum: number, deps: ParallelLogDeps = defaultParallelDeps): IssueLogger {
 	const prefix = `\x1b[2m[#${issueNum}]\x1b[0m `;
 	return {
-		info: (msg: string) => log.info(`${prefix}${msg}`),
-		ok: (msg: string) => log.ok(`${prefix}${msg}`),
-		warn: (msg: string) => log.warn(`${prefix}${msg}`),
-		error: (msg: string) => log.error(`${prefix}${msg}`),
-		step: (msg: string) => log.step(`${prefix}${msg}`),
-		dim: (msg: string) => log.dim(`${prefix}${msg}`)
+		info: (msg: string) => deps.log.info(`${prefix}${msg}`),
+		ok: (msg: string) => deps.log.ok(`${prefix}${msg}`),
+		warn: (msg: string) => deps.log.warn(`${prefix}${msg}`),
+		error: (msg: string) => deps.log.error(`${prefix}${msg}`),
+		step: (msg: string) => deps.log.step(`${prefix}${msg}`),
+		dim: (msg: string) => deps.log.dim(`${prefix}${msg}`)
 	};
 }
 
 // ---------------------------------------------------------------------------
-// Single-issue pipeline (used by both sequential and parallel schedulers)
+// Dependency injection interfaces (split by concern for ISP compliance)
+// ---------------------------------------------------------------------------
+
+export interface ParallelGitDeps {
+	createWorktree: typeof createWorktree;
+	removeWorktree: typeof removeWorktree;
+}
+
+export interface ParallelGithubDeps {
+	createPR: typeof createPR;
+}
+
+export interface ParallelAgentDeps {
+	implementIssue: typeof implementIssue;
+	fixVerificationFailure: typeof fixVerificationFailure;
+	runVerify: typeof runVerify;
+	buildPRBody: typeof buildPRBody;
+}
+
+export interface ParallelStateDeps {
+	saveState: (state: OrchestratorState, file: string) => void;
+	getIssueState: typeof getIssueState;
+	withRetries: typeof withRetries;
+}
+
+export interface ParallelLogDeps {
+	log: typeof log;
+	printStatus: typeof printStatus;
+}
+
+export type ParallelDeps = ParallelGitDeps & ParallelGithubDeps & ParallelAgentDeps & ParallelStateDeps & ParallelLogDeps;
+
+export const defaultParallelDeps: ParallelDeps = {
+	createWorktree,
+	removeWorktree,
+	createPR,
+	implementIssue,
+	fixVerificationFailure,
+	runVerify,
+	buildPRBody,
+	saveState,
+	getIssueState,
+	withRetries,
+	log,
+	printStatus,
+};
+
+// ---------------------------------------------------------------------------
+// Options objects (split to keep each interface ≤8 members)
+// ---------------------------------------------------------------------------
+
+export interface ProcessOneIssueContext {
+	issueNum: number;
+	node: DependencyNode;
+	state: OrchestratorState;
+	repoRoot: string;
+	logger: RunLogger;
+	safeUpdateState: (fn: (s: OrchestratorState) => void) => Promise<void>;
+	iLog: IssueLogger;
+}
+
+export interface ProcessOneIssueConfig {
+	config: OrchestratorConfig;
+	flags: OrchestratorFlags;
+	deps?: ParallelDeps;
+}
+
+/** Execution context for the parallel loop. */
+export interface RunParallelLoopContext {
+	executionOrder: number[];
+	graph: Map<number, DependencyNode>;
+	state: OrchestratorState;
+	startIdx: number;
+	stateFile: string;
+	repoRoot: string;
+	logger: RunLogger;
+}
+
+/** Config and flags for the parallel loop. */
+export interface RunParallelLoopConfig {
+	config: OrchestratorConfig;
+	flags: OrchestratorFlags;
+	deps?: ParallelDeps;
+}
+
+export type RunParallelLoopOptions = RunParallelLoopContext & RunParallelLoopConfig;
+
+// ---------------------------------------------------------------------------
+// Single-issue pipeline (used by the parallel scheduler)
 // ---------------------------------------------------------------------------
 
 /**
  * Process a single issue in parallel mode.
  * Never throws — all errors are caught and recorded in state via safeUpdateState.
  */
-async function processOneIssue(
-	issueNum: number,
-	node: DependencyNode,
-	state: OrchestratorState,
-	config: OrchestratorConfig,
-	flags: OrchestratorFlags,
-	repoRoot: string,
-	logger: RunLogger,
-	safeUpdateState: (fn: (s: OrchestratorState) => void) => Promise<void>,
-	iLog: IssueLogger
+export async function processOneIssue(
+	ctx: ProcessOneIssueContext,
+	cfg: ProcessOneIssueConfig
 ): Promise<void> {
+	const { issueNum, node, state, repoRoot, logger, safeUpdateState, iLog } = ctx;
+	const { config, flags } = cfg;
+	const d = cfg.deps ?? defaultParallelDeps;
+
 	const issueStartTime = Date.now();
 	iLog.step(`ISSUE #${issueNum}: ${node.issue.title}`);
 
@@ -100,12 +185,12 @@ async function processOneIssue(
 		})
 		.filter((b): b is string => b !== null);
 
-	const wtResult = await createWorktree(node.branch, depBranches, config, repoRoot, logger, issueNum);
+	const wtResult = await d.createWorktree(node.branch, depBranches, config, repoRoot, logger, issueNum);
 	if (!wtResult.ok) {
 		const errMsg = wtResult.error ?? 'Worktree creation failed';
 		iLog.error(errMsg);
 		await safeUpdateState((s) => {
-			const is = getIssueState(s, issueNum, node.issue.title);
+			const is = d.getIssueState(s, issueNum, node.issue.title);
 			is.status = 'failed';
 			is.error = errMsg;
 		});
@@ -115,7 +200,7 @@ async function processOneIssue(
 
 	const { worktreePath, baseBranch } = wtResult;
 	await safeUpdateState((s) => {
-		const is = getIssueState(s, issueNum, node.issue.title);
+		const is = d.getIssueState(s, issueNum, node.issue.title);
 		is.branch = node.branch;
 		is.baseBranch = baseBranch;
 		is.status = 'in_progress';
@@ -125,9 +210,9 @@ async function processOneIssue(
 
 	// Implement (with retries)
 	let lastImplError: string | undefined;
-	const implRetryResult = await withRetries(
+	const implRetryResult = await d.withRetries(
 		async () => {
-			const r = await implementIssue(node.issue, node.branch, baseBranch, config, worktreePath, logger);
+			const r = await d.implementIssue({ issue: node.issue, branchName: node.branch, baseBranch, config, worktreePath, logger });
 			if (!r.ok) lastImplError = r.error;
 			return r;
 		},
@@ -141,21 +226,21 @@ async function processOneIssue(
 		iLog.error(`Implementation attempt failed: ${lastImplError}`);
 		const errMsg = `Implementation failed after ${config.retries.implement + 1} attempts: ${lastImplError}`;
 		await safeUpdateState((s) => {
-			const is = getIssueState(s, issueNum, node.issue.title);
+			const is = d.getIssueState(s, issueNum, node.issue.title);
 			is.status = 'failed';
 			is.error = errMsg;
 		});
 		logger.issueFailed(issueNum, errMsg);
-		await removeWorktree(worktreePath, node.branch, repoRoot, logger, issueNum);
+		await d.removeWorktree(worktreePath, node.branch, repoRoot, logger, issueNum);
 		return;
 	}
 
 	// Verify (with retries and fix attempts)
 	iLog.info('Running verification pipeline...');
 	let lastVerifyResult: Awaited<ReturnType<typeof runVerify>> | undefined;
-	const verifyRetryResult = await withRetries(
+	const verifyRetryResult = await d.withRetries(
 		async () => {
-			const r = await runVerify({
+			const r = await d.runVerify({
 				verify: config.verify,
 				e2e: config.e2e,
 				cwd: worktreePath,
@@ -171,7 +256,7 @@ async function processOneIssue(
 			if (failedStep) {
 				iLog.error(`Verification failed at ${failedStep}`);
 				iLog.warn(`Verification retry ${attempt + 1}/${config.retries.verify} — feeding errors back to agent`);
-				await fixVerificationFailure({
+				await d.fixVerificationFailure({
 					issueNumber: issueNum,
 					failedStep,
 					errorOutput: lastVerifyResult?.error ?? '',
@@ -189,12 +274,12 @@ async function processOneIssue(
 		const failedStep = lastVerifyResult?.failedStep ?? 'unknown';
 		const errMsg = `Verification failed at ${failedStep} after ${config.retries.verify + 1} attempts: ${lastVerifyResult?.error}`;
 		await safeUpdateState((s) => {
-			const is = getIssueState(s, issueNum, node.issue.title);
+			const is = d.getIssueState(s, issueNum, node.issue.title);
 			is.status = 'failed';
 			is.error = errMsg;
 		});
 		logger.issueFailed(issueNum, errMsg);
-		await removeWorktree(worktreePath, node.branch, repoRoot, logger, issueNum);
+		await d.removeWorktree(worktreePath, node.branch, repoRoot, logger, issueNum);
 		return;
 	}
 
@@ -202,29 +287,29 @@ async function processOneIssue(
 
 	// Create PR
 	iLog.info('Creating pull request...');
-	const prBody = buildPRBody(node.issue, config, flags);
-	const prResult = await createPR(node.issue.title, prBody, baseBranch, node.branch, worktreePath);
+	const prBody = d.buildPRBody(node.issue, config, flags);
+	const prResult = await d.createPR(node.issue.title, prBody, baseBranch, node.branch, worktreePath);
 	if (!prResult.ok) {
 		const errMsg = prResult.error ?? 'PR creation failed';
 		iLog.error(errMsg);
 		await safeUpdateState((s) => {
-			const is = getIssueState(s, issueNum, node.issue.title);
+			const is = d.getIssueState(s, issueNum, node.issue.title);
 			is.status = 'failed';
 			is.error = errMsg;
 		});
 		logger.issueFailed(issueNum, errMsg);
-		await removeWorktree(worktreePath, node.branch, repoRoot, logger, issueNum);
+		await d.removeWorktree(worktreePath, node.branch, repoRoot, logger, issueNum);
 		return;
 	}
 	if (prResult.prNumber) logger.prCreated(issueNum, prResult.prNumber);
 
 	// Clean up worktree
-	await removeWorktree(worktreePath, node.branch, repoRoot, logger, issueNum);
+	await d.removeWorktree(worktreePath, node.branch, repoRoot, logger, issueNum);
 
 	// Mark complete
 	const durationMs = Date.now() - issueStartTime;
 	await safeUpdateState((s) => {
-		const is = getIssueState(s, issueNum, node.issue.title);
+		const is = d.getIssueState(s, issueNum, node.issue.title);
 		is.status = 'completed';
 		is.error = null;
 		is.prNumber = prResult.prNumber ?? null;
@@ -243,17 +328,10 @@ async function processOneIssue(
  * Uses dependency-aware scheduling: issues become ready when all their deps complete.
  * Failures do not halt other issues; dependents of failed issues are marked `blocked`.
  */
-export async function runParallelLoop(
-	executionOrder: number[],
-	graph: Map<number, DependencyNode>,
-	state: OrchestratorState,
-	config: OrchestratorConfig,
-	flags: OrchestratorFlags,
-	startIdx: number,
-	stateFile: string,
-	repoRoot: string,
-	logger: RunLogger
-): Promise<void> {
+export async function runParallelLoop(opts: RunParallelLoopOptions): Promise<void> {
+	const { executionOrder, graph, state, startIdx, stateFile, repoRoot, logger, config, flags } = opts;
+	const d = opts.deps ?? defaultParallelDeps;
+
 	const parallelN = flags.parallel;
 	const mutex = new Mutex();
 
@@ -263,7 +341,7 @@ export async function runParallelLoop(
 	async function safeUpdateState(fn: (s: OrchestratorState) => void): Promise<void> {
 		return mutex.run(async () => {
 			fn(state);
-			saveState(state, stateFile);
+			d.saveState(state, stateFile);
 		});
 	}
 
@@ -283,7 +361,7 @@ export async function runParallelLoop(
 	const workIssues = executionOrder.slice(startIdx);
 	const activeSlots = new Map<number, Promise<void>>();
 
-	log.info(`Starting parallel execution (${parallelN} concurrent slots)`);
+	d.log.info(`Starting parallel execution (${parallelN} concurrent slots)`);
 
 	while (true) {
 		// Mark newly-blocked issues (whose deps have failed/blocked)
@@ -297,7 +375,7 @@ export async function runParallelLoop(
 			const failedDep = node.dependsOn.find(isDepFailed);
 			if (failedDep !== undefined) {
 				await safeUpdateState((s) => {
-					const entry = getIssueState(s, issueNum, node.issue.title);
+					const entry = d.getIssueState(s, issueNum, node.issue.title);
 					entry.status = 'blocked';
 					entry.error = `Dependency #${failedDep} failed or was blocked`;
 				});
@@ -323,20 +401,20 @@ export async function runParallelLoop(
 			// No dep may be failed/blocked
 			if (node.dependsOn.some(isDepFailed)) continue;
 
-			const iLog = makeIssueLog(issueNum);
+			const iLog = makeIssueLog(issueNum, d);
 			const slot = processOneIssue(
-				issueNum,
-				node,
-				state,
-				config,
-				flags,
-				repoRoot,
-				logger,
-				safeUpdateState,
-				iLog
+				{ issueNum, node, state, repoRoot, logger, safeUpdateState, iLog },
+				{ config, flags, deps: d }
 			).then(
 				() => { activeSlots.delete(issueNum); },
-				() => { activeSlots.delete(issueNum); }
+				async (err) => {
+					activeSlots.delete(issueNum);
+					await safeUpdateState((s) => {
+						const entry = d.getIssueState(s, issueNum, node.issue.title);
+						entry.status = 'failed';
+						entry.error = err?.message ?? 'Unexpected error during processing';
+					});
+				}
 			);
 			activeSlots.set(issueNum, slot);
 		}
@@ -348,6 +426,6 @@ export async function runParallelLoop(
 		await Promise.race([...activeSlots.values()]);
 	}
 
-	log.step('ALL PARALLEL WORK COMPLETE');
-	printStatus(state);
+	d.log.step('ALL PARALLEL WORK COMPLETE');
+	d.printStatus(state);
 }

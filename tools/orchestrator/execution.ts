@@ -25,6 +25,89 @@ import type {
 import type { RunLogger } from '../../shared/logging.ts';
 
 // ---------------------------------------------------------------------------
+// Dependency injection interfaces (split by concern for ISP compliance)
+// ---------------------------------------------------------------------------
+
+export interface ExecutionGitDeps {
+	createWorktree: typeof createWorktree;
+	removeWorktree: typeof removeWorktree;
+}
+
+export interface ExecutionGithubDeps {
+	fetchOpenIssues: typeof fetchOpenIssues;
+	createSubIssues: typeof createSubIssues;
+	createPR: typeof createPR;
+}
+
+export interface ExecutionAgentDeps {
+	assessIssueSize: typeof assessIssueSize;
+	implementIssue: typeof implementIssue;
+	fixVerificationFailure: typeof fixVerificationFailure;
+	runVerify: typeof runVerify;
+}
+
+export interface ExecutionStateDeps {
+	saveState: (state: OrchestratorState, file: string) => void;
+	getIssueState: typeof getIssueState;
+	withRetries: typeof withRetries;
+}
+
+export interface ExecutionDisplayDeps {
+	buildGraph: typeof buildGraph;
+	topologicalSort: typeof topologicalSort;
+	printExecutionPlan: typeof printExecutionPlan;
+	printStatus: typeof printStatus;
+	log: typeof log;
+	exit: (code: number) => never;
+}
+
+export type ExecutionDeps = ExecutionGitDeps & ExecutionGithubDeps & ExecutionAgentDeps & ExecutionStateDeps & ExecutionDisplayDeps;
+
+// ---------------------------------------------------------------------------
+// Options object for runMainLoop (split for ISP compliance)
+// ---------------------------------------------------------------------------
+
+/** Execution context: mutable data structures passed into the loop. */
+export interface RunMainLoopContext {
+	executionOrder: number[];
+	graph: Map<number, DependencyNode>;
+	state: OrchestratorState;
+	stateFile: string;
+	repoRoot: string;
+	logger: RunLogger;
+}
+
+/** Execution config: immutable settings + flags + optional DI. */
+export interface RunMainLoopConfig {
+	config: OrchestratorConfig;
+	flags: OrchestratorFlags;
+	deps?: ExecutionDeps;
+}
+
+export type RunMainLoopOptions = RunMainLoopContext & RunMainLoopConfig;
+
+export const defaultExecutionDeps: ExecutionDeps = {
+	createWorktree,
+	removeWorktree,
+	fetchOpenIssues,
+	createSubIssues,
+	createPR,
+	assessIssueSize,
+	implementIssue,
+	fixVerificationFailure,
+	runVerify,
+	saveState,
+	getIssueState,
+	withRetries,
+	buildGraph,
+	topologicalSort,
+	printExecutionPlan,
+	printStatus,
+	log,
+	exit: (code) => process.exit(code),
+};
+
+// ---------------------------------------------------------------------------
 // PR body builder
 // ---------------------------------------------------------------------------
 
@@ -61,28 +144,22 @@ Automated by pai orchestrate`;
 // Main orchestration loop
 // ---------------------------------------------------------------------------
 
-export async function runMainLoop(
-	executionOrder: number[],
-	graph: Map<number, DependencyNode>,
-	state: OrchestratorState,
-	config: OrchestratorConfig,
-	flags: OrchestratorFlags,
-	stateFile: string,
-	repoRoot: string,
-	logger: RunLogger
-): Promise<void> {
+export async function runMainLoop(opts: RunMainLoopOptions): Promise<void> {
+	const { executionOrder, graph, state, stateFile, repoRoot, logger, config, flags } = opts;
+	const d = opts.deps ?? defaultExecutionDeps;
+
 	let startIdx = 0;
 	if (flags.singleIssue !== null) {
 		startIdx = executionOrder.indexOf(flags.singleIssue);
 		if (startIdx === -1) {
-			log.error(`Issue #${flags.singleIssue} not found in execution order`);
-			process.exit(1);
+			d.log.error(`Issue #${flags.singleIssue} not found in execution order`);
+			d.exit(1);
 		}
 	} else if (flags.fromIssue !== null) {
 		startIdx = executionOrder.indexOf(flags.fromIssue);
 		if (startIdx === -1) {
-			log.error(`Issue #${flags.fromIssue} not found in execution order`);
-			process.exit(1);
+			d.log.error(`Issue #${flags.fromIssue} not found in execution order`);
+			d.exit(1);
 		}
 	} else {
 		for (let i = 0; i < executionOrder.length; i++) {
@@ -97,7 +174,7 @@ export async function runMainLoop(
 	const modeLabel = flags.singleMode ? ' (single issue mode)' : '';
 	const startNode = graph.get(executionOrder[startIdx]);
 	const startTitle = startNode ? `: ${startNode.issue.title}` : '';
-	log.info(
+	d.log.info(
 		`Starting from issue #${executionOrder[startIdx]}${startTitle} (position ${startIdx + 1}/${executionOrder.length})${modeLabel}`
 	);
 
@@ -106,18 +183,18 @@ export async function runMainLoop(
 		const node = graph.get(issueNum);
 		if (!node) continue;
 
-		const issueState = getIssueState(state, issueNum, node.issue.title);
+		const issueState = d.getIssueState(state, issueNum, node.issue.title);
 		if (issueState.status === 'completed') {
-			log.dim(`Skipping #${issueNum} (already completed)`);
+			d.log.dim(`Skipping #${issueNum} (already completed)`);
 			continue;
 		}
 		if (issueState.status === 'split') {
-			log.dim(`Skipping #${issueNum} (split into sub-issues)`);
+			d.log.dim(`Skipping #${issueNum} (split into sub-issues)`);
 			continue;
 		}
 
 		const issueStartTime = Date.now();
-		log.step(`ISSUE #${issueNum}: ${node.issue.title} (${i + 1}/${executionOrder.length})`);
+		d.log.step(`ISSUE #${issueNum}: ${node.issue.title} (${i + 1}/${executionOrder.length})`);
 
 		// Check dependencies
 		const unmetDeps = node.dependsOn.filter((dep) => {
@@ -127,27 +204,27 @@ export async function runMainLoop(
 		});
 
 		if (unmetDeps.length > 0) {
-			log.error(`Unmet dependencies: ${unmetDeps.map((d) => `#${d}`).join(', ')}`);
-			log.error('Cannot proceed — dependencies must be completed first');
+			d.log.error(`Unmet dependencies: ${unmetDeps.map((dep) => `#${dep}`).join(', ')}`);
+			d.log.error('Cannot proceed — dependencies must be completed first');
 			issueState.status = 'failed';
 			issueState.error = `Unmet dependencies: ${unmetDeps.join(', ')}`;
-			saveState(state, stateFile);
+			d.saveState(state, stateFile);
 			logger.issueFailed(issueNum, issueState.error);
-			process.exit(1);
+			d.exit(1);
 		}
 
 		// Assess splitting
 		if (!flags.skipSplit) {
-			log.info('Assessing issue size...');
-			const assessment = await assessIssueSize(node.issue, config, repoRoot);
-			log.dim(`Assessment: ${assessment.reasoning}`);
+			d.log.info('Assessing issue size...');
+			const assessment = await d.assessIssueSize(node.issue, config, repoRoot);
+			d.log.dim(`Assessment: ${assessment.reasoning}`);
 
 			if (assessment.shouldSplit && assessment.proposedSplits.length > 0) {
-				log.warn(
+				d.log.warn(
 					`Issue #${issueNum} needs splitting into ${assessment.proposedSplits.length} sub-issues`
 				);
 
-				const subIssueNumbers = await createSubIssues(
+				const subIssueNumbers = await d.createSubIssues(
 					node.issue,
 					assessment.proposedSplits,
 					node.dependsOn
@@ -155,22 +232,22 @@ export async function runMainLoop(
 
 				issueState.status = 'split';
 				issueState.subIssues = subIssueNumbers;
-				saveState(state, stateFile);
+				d.saveState(state, stateFile);
 				logger.issueSplit(issueNum, subIssueNumbers);
 
-				log.ok(`Split into: ${subIssueNumbers.map((n) => `#${n}`).join(', ')}`);
-				log.info('Re-fetching issues and rebuilding graph...');
+				d.log.ok(`Split into: ${subIssueNumbers.map((n) => `#${n}`).join(', ')}`);
+				d.log.info('Re-fetching issues and rebuilding graph...');
 
-				const freshIssues = await fetchOpenIssues(config.allowedAuthors);
-				const freshGraph = buildGraph(freshIssues, config);
-				const freshOrder = topologicalSort(freshGraph);
+				const freshIssues = await d.fetchOpenIssues(config.allowedAuthors);
+				const freshGraph = d.buildGraph(freshIssues, config);
+				const freshOrder = d.topologicalSort(freshGraph);
 
 				graph.clear();
 				for (const [k, v] of freshGraph) graph.set(k, v);
 				executionOrder.length = 0;
 				executionOrder.push(...freshOrder);
 
-				printExecutionPlan(executionOrder, graph, config.baseBranch);
+				d.printExecutionPlan(executionOrder, graph, config.baseBranch);
 
 				const firstSubIdx = executionOrder.findIndex((n) => subIssueNumbers.includes(n));
 				if (firstSubIdx !== -1) {
@@ -181,7 +258,7 @@ export async function runMainLoop(
 		}
 
 		// Create worktree with fresh branch
-		log.info('Creating worktree...');
+		d.log.info('Creating worktree...');
 		const depBranches = node.dependsOn
 			.map((dep) => {
 				const depNode = graph.get(dep);
@@ -192,56 +269,56 @@ export async function runMainLoop(
 			})
 			.filter((b): b is string => b !== null);
 
-		const wtResult = await createWorktree(node.branch, depBranches, config, repoRoot, logger, issueNum);
+		const wtResult = await d.createWorktree(node.branch, depBranches, config, repoRoot, logger, issueNum);
 		if (!wtResult.ok) {
-			log.error(wtResult.error ?? 'Unknown worktree creation error');
+			d.log.error(wtResult.error ?? 'Unknown worktree creation error');
 			issueState.status = 'failed';
 			issueState.error = wtResult.error ?? 'Worktree creation failed';
-			saveState(state, stateFile);
+			d.saveState(state, stateFile);
 			logger.issueFailed(issueNum, issueState.error);
-			process.exit(1);
+			d.exit(1);
 		}
 
 		const { worktreePath, baseBranch } = wtResult;
 		issueState.branch = node.branch;
 		issueState.baseBranch = baseBranch;
 		issueState.status = 'in_progress';
-		saveState(state, stateFile);
+		d.saveState(state, stateFile);
 		logger.issueStart(issueNum, node.issue.title, node.branch, baseBranch);
 
-		log.ok(`Worktree at ${worktreePath} on branch ${node.branch} (base: ${baseBranch})`);
+		d.log.ok(`Worktree at ${worktreePath} on branch ${node.branch} (base: ${baseBranch})`);
 
 		// Implement (inside worktree)
 		let lastImplError: string | undefined;
-		const implRetryResult = await withRetries(
+		const implRetryResult = await d.withRetries(
 			async () => {
-				const r = await implementIssue(node.issue, node.branch, baseBranch, config, worktreePath, logger);
+				const r = await d.implementIssue({ issue: node.issue, branchName: node.branch, baseBranch, config, worktreePath, logger });
 				if (!r.ok) lastImplError = r.error;
 				return r;
 			},
 			async (attempt) => {
-				log.warn(`Implementation retry ${attempt + 1}/${config.retries.implement}`);
+				d.log.warn(`Implementation retry ${attempt + 1}/${config.retries.implement}`);
 			},
 			config.retries.implement + 1
 		);
 
 		if (!implRetryResult.ok) {
-			log.error(`Implementation attempt failed: ${lastImplError}`);
+			d.log.error(`Implementation attempt failed: ${lastImplError}`);
 			issueState.status = 'failed';
 			issueState.error = `Implementation failed after ${config.retries.implement + 1} attempts: ${lastImplError}`;
-			saveState(state, stateFile);
+			d.saveState(state, stateFile);
 			logger.issueFailed(issueNum, issueState.error);
-			await removeWorktree(worktreePath, node.branch, repoRoot, logger, issueNum);
-			log.error('HALTING — implementation failed');
-			process.exit(1);
+			await d.removeWorktree(worktreePath, node.branch, repoRoot, logger, issueNum);
+			d.log.error('HALTING — implementation failed');
+			d.exit(1);
 		}
 
 		// Verify (inside worktree)
-		log.info('Running verification pipeline...');
+		d.log.info('Running verification pipeline...');
 		let lastVerifyResult: Awaited<ReturnType<typeof runVerify>> | undefined;
-		const verifyRetryResult = await withRetries(
+		const verifyRetryResult = await d.withRetries(
 			async () => {
-				const r = await runVerify({
+				const r = await d.runVerify({
 					verify: config.verify,
 					e2e: config.e2e,
 					cwd: worktreePath,
@@ -255,18 +332,18 @@ export async function runMainLoop(
 			async (attempt) => {
 				const failedStep = lastVerifyResult?.failedStep;
 				if (failedStep) {
-					log.error(`Verification failed at ${failedStep}`);
-					log.warn(
+					d.log.error(`Verification failed at ${failedStep}`);
+					d.log.warn(
 						`Verification retry ${attempt + 1}/${config.retries.verify} — feeding errors back to agent`
 					);
-					await fixVerificationFailure(
-						issueNum,
+					await d.fixVerificationFailure({
+						issueNumber: issueNum,
 						failedStep,
-						lastVerifyResult?.error ?? '',
+						errorOutput: lastVerifyResult?.error ?? '',
 						config,
 						worktreePath,
 						logger
-					);
+					});
 				}
 			},
 			config.retries.verify + 1
@@ -276,32 +353,32 @@ export async function runMainLoop(
 			const failedStep = lastVerifyResult?.failedStep ?? 'unknown';
 			issueState.status = 'failed';
 			issueState.error = `Verification failed at ${failedStep} after ${config.retries.verify + 1} attempts: ${lastVerifyResult?.error}`;
-			saveState(state, stateFile);
+			d.saveState(state, stateFile);
 			logger.issueFailed(issueNum, issueState.error);
-			await removeWorktree(worktreePath, node.branch, repoRoot, logger, issueNum);
-			log.error('HALTING — verification failed');
-			process.exit(1);
+			await d.removeWorktree(worktreePath, node.branch, repoRoot, logger, issueNum);
+			d.log.error('HALTING — verification failed');
+			d.exit(1);
 		}
 
-		log.ok('All verification gates passed');
+		d.log.ok('All verification gates passed');
 
 		// Create PR (push from worktree)
-		log.info('Creating pull request...');
+		d.log.info('Creating pull request...');
 		const prBody = buildPRBody(node.issue, config, flags);
-		const prResult = await createPR(node.issue.title, prBody, baseBranch, node.branch, worktreePath);
+		const prResult = await d.createPR(node.issue.title, prBody, baseBranch, node.branch, worktreePath);
 		if (!prResult.ok) {
-			log.error(prResult.error ?? 'PR creation failed');
+			d.log.error(prResult.error ?? 'PR creation failed');
 			issueState.status = 'failed';
 			issueState.error = prResult.error ?? 'PR creation failed';
-			saveState(state, stateFile);
+			d.saveState(state, stateFile);
 			logger.issueFailed(issueNum, issueState.error);
-			await removeWorktree(worktreePath, node.branch, repoRoot, logger, issueNum);
-			process.exit(1);
+			await d.removeWorktree(worktreePath, node.branch, repoRoot, logger, issueNum);
+			d.exit(1);
 		}
 		if (prResult.prNumber) logger.prCreated(issueNum, prResult.prNumber);
 
 		// Clean up worktree (branch stays for the PR)
-		await removeWorktree(worktreePath, node.branch, repoRoot, logger, issueNum);
+		await d.removeWorktree(worktreePath, node.branch, repoRoot, logger, issueNum);
 
 		// Mark complete
 		const durationMs = Date.now() - issueStartTime;
@@ -309,21 +386,21 @@ export async function runMainLoop(
 		issueState.error = null;
 		issueState.prNumber = prResult.prNumber ?? null;
 		issueState.completedAt = new Date().toISOString();
-		saveState(state, stateFile);
+		d.saveState(state, stateFile);
 		logger.issueComplete(issueNum, prResult.prNumber, durationMs);
 
-		log.ok(`Issue #${issueNum} completed → PR #${prResult.prNumber}`);
+		d.log.ok(`Issue #${issueNum} completed → PR #${prResult.prNumber}`);
 
 		if (flags.singleMode) {
-			log.step('SINGLE ISSUE COMPLETE');
-			log.info(`Finished #${issueNum}. Run again to process the next issue.`);
-			printStatus(state);
+			d.log.step('SINGLE ISSUE COMPLETE');
+			d.log.info(`Finished #${issueNum}. Run again to process the next issue.`);
+			d.printStatus(state);
 			break;
 		}
 	}
 
 	if (!flags.singleMode) {
-		log.step('ALL ISSUES COMPLETED');
-		printStatus(state);
+		d.log.step('ALL ISSUES COMPLETED');
+		d.printStatus(state);
 	}
 }

@@ -215,5 +215,5 @@ export async function orchestrate(flags: OrchestratorFlags, deps: OrchestrateDep
 	} else {
 		await deps.runMainLoop({ executionOrder, graph, state, config, flags, stateFile, repoRoot, logger });
 	}
-	deps.log.runComplete({ issueCount: executionOrder.length });
+	logger.runComplete({ issueCount: executionOrder.length });
 }

@@ -128,8 +128,9 @@ describe('defaultAgentRunnerDeps.parseJson', () => {
 		}
 	});
 
-	test('throws on invalid JSON (standard JSON.parse behavior)', () => {
-		expect(() => defaultAgentRunnerDeps.parseJson('not json')).toThrow();
+	test('returns ok:false on invalid JSON', () => {
+		const result = defaultAgentRunnerDeps.parseJson('not json');
+		expect(result.ok).toBe(false);
 	});
 });
 

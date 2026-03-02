@@ -11,6 +11,7 @@ import type { RunClaudeOpts } from '../../shared/claude.ts';
 import type { RunLogger } from '../../shared/logging.ts';
 import type { GitHubIssue, OrchestratorConfig } from './types.ts';
 import { fixVerificationFailure as _fixVerificationFailure } from './verify-fixer.ts';
+import { defaultFsAdapter } from '../../shared/adapters/fs.ts';
 
 export interface AgentRunnerDeps {
 	runClaude: (opts: RunClaudeOpts) => Promise<{ ok: boolean; output: string }>;
@@ -24,7 +25,8 @@ export const defaultAgentRunnerDeps: AgentRunnerDeps = {
 	makeSpinner: () => new Spinner(),
 	logDim: (msg: string) => log.dim(msg),
 	parseJson: (text: string) => {
-		const result = JSON.parse(text) as unknown;
+		const result = defaultFsAdapter.parseJson(text);
+		if (result === null) return { ok: false as const };
 		return { ok: true as const, value: result };
 	}
 };

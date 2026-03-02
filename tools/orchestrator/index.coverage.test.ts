@@ -87,9 +87,6 @@ const noopLogger: RunLogger = {
 	prCreated: () => {},
 } as unknown as RunLogger;
 
-// The `log` dep in OrchestrateDeps is typed as `typeof log` from shared/log.ts,
-// but orchestrate() also calls deps.log.runComplete(...) on line 218. We cast to
-// satisfy both usages (the source type annotation has a bug; we handle it here).
 const noopLog = {
 	info: () => {},
 	ok: () => {},
@@ -97,8 +94,7 @@ const noopLog = {
 	error: () => {},
 	step: () => {},
 	dim: () => {},
-	runComplete: () => {},
-} as unknown as OrchestrateDeps['log'];
+} as OrchestrateDeps['log'];
 
 // ---------------------------------------------------------------------------
 // Mock deps factory

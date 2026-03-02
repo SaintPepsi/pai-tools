@@ -66,4 +66,5 @@ export interface OrchestratorFlags {
 	singleIssue: number | null;
 	fromIssue: number | null;
 	parallel: number;
+	file: string | null;
 }

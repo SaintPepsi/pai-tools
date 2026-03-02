@@ -4,7 +4,17 @@ import type { OrchestratorFlags } from './types.ts';
 // Flag parsing
 // ---------------------------------------------------------------------------
 
-export function parseFlags(args: string[]): OrchestratorFlags {
+export interface FlagsDeps {
+	exit: (code: number) => never;
+	logError: (msg: string) => void;
+}
+
+export const defaultFlagsDeps: FlagsDeps = {
+	exit: (code) => process.exit(code),
+	logError: (msg) => console.error(msg),
+};
+
+export function parseFlags(args: string[], deps: FlagsDeps = defaultFlagsDeps): OrchestratorFlags {
 
 	const singleIssue = (() => {
 		const idx = args.indexOf('--single');
@@ -22,8 +32,8 @@ export function parseFlags(args: string[]): OrchestratorFlags {
 		if (idx === -1) return null;
 		const val = Number(args[idx + 1]);
 		if (Number.isNaN(val)) {
-			console.error('--from requires a valid issue number');
-			process.exit(1);
+			deps.logError('--from requires a valid issue number');
+			deps.exit(1);
 		}
 		return val;
 	})();
@@ -33,8 +43,19 @@ export function parseFlags(args: string[]): OrchestratorFlags {
 		if (idx === -1) return 1;
 		const val = Number(args[idx + 1]);
 		if (Number.isNaN(val) || val < 1) {
-			console.error('--parallel requires a positive integer (e.g. --parallel 3)');
-			process.exit(1);
+			deps.logError('--parallel requires a positive integer (e.g. --parallel 3)');
+			deps.exit(1);
+		}
+		return val;
+	})();
+
+	const file = (() => {
+		const idx = args.indexOf('--file');
+		if (idx === -1) return null;
+		const val = args[idx + 1];
+		if (!val || val.startsWith('--')) {
+			deps.logError('--file requires a path (e.g. --file MIGRATION.md)');
+			deps.exit(1);
 		}
 		return val;
 	})();
@@ -49,6 +70,7 @@ export function parseFlags(args: string[]): OrchestratorFlags {
 		singleMode: args.includes('--single'),
 		singleIssue,
 		fromIssue,
-		parallel
+		parallel,
+		file
 	};
 }

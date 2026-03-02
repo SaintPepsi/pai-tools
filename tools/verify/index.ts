@@ -63,24 +63,44 @@ interface OrchestratorConfigPartial {
 	};
 }
 
-export async function verify(flags: VerifyFlags): Promise<void> {
+// ---------------------------------------------------------------------------
+// Dependency injection
+// ---------------------------------------------------------------------------
+
+export interface VerifyDeps {
+	log: (...args: unknown[]) => void;
+	exit: (code: number) => never;
+	findRepoRoot: () => string;
+	loadToolConfig: <T>(repoRoot: string, toolName: string, defaults: T) => T;
+	runVerify: (opts: VerifyOptions) => Promise<VerifyResult>;
+}
+
+export const defaultVerifyDeps: VerifyDeps = {
+	log: console.log,
+	exit: process.exit as (code: number) => never,
+	findRepoRoot,
+	loadToolConfig,
+	runVerify,
+};
+
+export async function verify(flags: VerifyFlags, deps: VerifyDeps = defaultVerifyDeps): Promise<void> {
 	if (flags.help) {
-		console.log(VERIFY_HELP);
+		deps.log(VERIFY_HELP);
 		return;
 	}
 
-	const repoRoot = findRepoRoot();
-	const config = loadToolConfig<OrchestratorConfigPartial>(repoRoot, 'orchestrator', {
+	const repoRoot = deps.findRepoRoot();
+	const config = deps.loadToolConfig<OrchestratorConfigPartial>(repoRoot, 'orchestrator', {
 		verify: [],
 	});
 
 	if (config.verify.length === 0 && !config.e2e) {
 		log.error('No verification commands configured in .pait/orchestrator.json');
 		log.info('Run `pait orchestrate` first to configure verification steps.');
-		process.exit(1);
+		deps.exit(1);
 	}
 
-	const result = await runVerify({
+	const result = await deps.runVerify({
 		verify: config.verify,
 		e2e: config.e2e,
 		cwd: repoRoot,
@@ -89,7 +109,7 @@ export async function verify(flags: VerifyFlags): Promise<void> {
 	});
 
 	if (flags.json) {
-		console.log(JSON.stringify(result, null, 2));
+		deps.log(JSON.stringify(result, null, 2));
 		return;
 	}
 
@@ -102,8 +122,8 @@ export async function verify(flags: VerifyFlags): Promise<void> {
 		log.error(`Verification failed at ${result.failedStep}`);
 		for (const step of result.steps) {
 			const icon = step.ok ? '\x1b[32m✓\x1b[0m' : '\x1b[31m✗\x1b[0m';
-			console.log(`  ${icon} ${step.name} (${step.durationMs}ms)`);
+			deps.log(`  ${icon} ${step.name} (${step.durationMs}ms)`);
 		}
-		process.exit(1);
+		deps.exit(1);
 	}
 }

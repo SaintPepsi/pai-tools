@@ -8,8 +8,19 @@
 
 import { Spinner } from '../../shared/log.ts';
 import { runClaude } from '../../shared/claude.ts';
+import type { RunClaudeOpts } from '../../shared/claude.ts';
 import type { RunLogger } from '../../shared/logging.ts';
 import type { OrchestratorConfig } from './types.ts';
+
+export interface VerifyFixerDeps {
+	runClaude: (opts: RunClaudeOpts) => Promise<{ ok: boolean; output: string }>;
+	makeSpinner: () => { start: (msg: string) => void; stop: () => void };
+}
+
+export const defaultVerifyFixerDeps: VerifyFixerDeps = {
+	runClaude,
+	makeSpinner: () => new Spinner()
+};
 
 export interface FixVerificationOptions {
 	issueNumber: number;
@@ -29,7 +40,10 @@ export interface FixVerificationOptions {
  * agent inside the issue worktree, and logs the agent output. Returns without
  * throwing — callers rely on the subsequent verify retry to detect success.
  */
-export async function fixVerificationFailure(opts: FixVerificationOptions): Promise<void> {
+export async function fixVerificationFailure(
+	opts: FixVerificationOptions,
+	deps: VerifyFixerDeps = defaultVerifyFixerDeps
+): Promise<void> {
 	const { issueNumber, failedStep, errorOutput, config, worktreePath, logger, spinnerLabel } = opts;
 
 	const verifyList = config.verify.map((v) => `- ${v.cmd}`).join('\n');
@@ -44,10 +58,10 @@ ${verifyList}
 Commit your fixes referencing #${issueNumber}.`;
 
 	const label = spinnerLabel ?? `Agent fixing verification for #${issueNumber}`;
-	const spinner = new Spinner();
+	const spinner = deps.makeSpinner();
 	spinner.start(label);
 
-	const fixResult = await runClaude({
+	const fixResult = await deps.runClaude({
 		prompt: fixPrompt,
 		model: config.models.implement,
 		cwd: worktreePath,

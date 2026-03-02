@@ -11,22 +11,111 @@ import { findRepoRoot, loadToolConfig, getStateFilePath } from '../../shared/con
 import { loadState, saveState } from '../../shared/state.ts';
 import { discoverMergeablePRs, determineMergeOrder, mergePR } from '../../shared/github.ts';
 import { runVerify } from '../verify/runner.ts';
-import type { VerifyCommand, E2EConfig } from '../verify/types.ts';
+import type { VerifyCommand, E2EConfig, VerifyResult } from '../verify/types.ts';
 import {
 	rebaseBranch, detectConflicts, presentConflicts, resolveConflicts, autoResolveConflicts
 } from '../../shared/git.ts';
 export { rebaseBranch, detectConflicts, presentConflicts, resolveConflicts, autoResolveConflicts } from '../../shared/git.ts';
+import type { ConflictInfo } from '../../shared/git.ts';
 import type {
 	FinalizeFlags,
 	FinalizeState,
 	PRMergeState,
 	MergeStrategy
 } from './types.ts';
+import type { MergeOrder } from '../../shared/github.ts';
 
 // Re-export types and shared GitHub operations
 export type { FinalizeFlags, FinalizeState, PRMergeState } from './types.ts';
 export type { MergeOrder } from '../../shared/github.ts';
 export { discoverMergeablePRs, determineMergeOrder } from '../../shared/github.ts';
+
+// ---------------------------------------------------------------------------
+// Dependency injection
+// ---------------------------------------------------------------------------
+
+export interface FinalizeDeps {
+	/** Discover open orchestrated PRs from state. */
+	discoverMergeablePRs: (repoRoot: string) => Promise<MergeOrder[]>;
+	/** Sort PRs into merge order. */
+	determineMergeOrder: (prs: MergeOrder[]) => MergeOrder[];
+	/** Rebase a branch onto another. */
+	rebaseBranch: (branch: string, onto: string, repoRoot: string) => Promise<{ ok: boolean; conflicts?: ConflictInfo[] }>;
+	/** Auto-resolve conflicts via Claude. */
+	autoResolveConflicts: (conflicts: ConflictInfo[], repoRoot: string) => Promise<boolean>;
+	/** Present conflicts interactively and collect resolution intents. */
+	presentConflicts: (conflicts: ConflictInfo[]) => Promise<Map<string, string>>;
+	/** Resolve conflicts using the collected intents. */
+	resolveConflicts: (conflicts: ConflictInfo[], intents: Map<string, string>, repoRoot: string) => Promise<boolean>;
+	/** Merge a GitHub PR. */
+	mergePR: (prNumber: number, strategy: MergeStrategy, dryRun: boolean) => Promise<{ ok: boolean; error?: string }>;
+	/** Run post-merge verification. */
+	runPostMergeVerify: (repoRoot: string, noVerify: boolean) => Promise<boolean>;
+	/** Find the repo root on disk. */
+	findRepoRoot: () => string;
+	/** Get the state file path for the given tool. */
+	getStateFilePath: (repoRoot: string, toolName: string) => string;
+	/** Load finalize state from disk. */
+	loadFinalizeState: (stateFile: string) => FinalizeState | null;
+	/** Save finalize state to disk. */
+	saveFinalizeState: (state: FinalizeState, stateFile: string) => void;
+	/** Run a git+shell command quietly, catching errors with the provided handler. */
+	gitQuiet: (cmd: string[], repoRoot: string) => Promise<void>;
+	/** Run a git+shell command quietly, swallowing failures silently (for non-critical ops). */
+	gitQuietSwallow: (cmd: string[], repoRoot: string) => Promise<void>;
+	/** Run a gh shell command quietly, swallowing failures (e.g. issue close, pr edit). */
+	ghQuietSwallow: (cmd: string[]) => Promise<void>;
+	/** Call process.exit (injectable for tests). */
+	exit: (code: number) => never;
+	/** Log functions (injectable for tests). */
+	log: {
+		info: (msg: string) => void;
+		ok: (msg: string) => void;
+		warn: (msg: string) => void;
+		error: (msg: string) => void;
+		step: (msg: string) => void;
+	};
+	/** Console output (injectable for tests). */
+	print: (msg: string) => void;
+}
+
+async function defaultGitQuiet(cmd: string[], repoRoot: string): Promise<void> {
+	const [git, ...args] = cmd;
+	await $`${git} -C ${repoRoot} ${args}`.quiet().catch((e) => {
+		log.warn(`git ${args.join(' ')} failed: ${String(e).slice(0, 200)}`);
+	});
+}
+
+async function defaultGitQuietSwallow(cmd: string[], repoRoot: string): Promise<void> {
+	const [git, ...args] = cmd;
+	await $`${git} -C ${repoRoot} ${args}`.quiet().catch(() => {});
+}
+
+async function defaultGhQuietSwallow(cmd: string[]): Promise<void> {
+	const [gh, ...args] = cmd;
+	await $`${gh} ${args}`.quiet().catch(() => {});
+}
+
+export const defaultFinalizeDeps: FinalizeDeps = {
+	discoverMergeablePRs,
+	determineMergeOrder,
+	rebaseBranch,
+	autoResolveConflicts,
+	presentConflicts,
+	resolveConflicts,
+	mergePR,
+	runPostMergeVerify,
+	findRepoRoot,
+	getStateFilePath,
+	loadFinalizeState,
+	saveFinalizeState,
+	gitQuiet: defaultGitQuiet,
+	gitQuietSwallow: defaultGitQuietSwallow,
+	ghQuietSwallow: defaultGhQuietSwallow,
+	exit: (code) => process.exit(code),
+	log,
+	print: (msg) => console.log(msg),
+};
 
 // ---------------------------------------------------------------------------
 // Flag parsing
@@ -80,9 +169,20 @@ export function initFinalizeState(): FinalizeState {
 // Post-merge verification
 // ---------------------------------------------------------------------------
 
-async function runPostMergeVerify(
+export interface PostMergeVerifyDeps {
+	loadToolConfig: <T>(repoRoot: string, toolName: string, defaults: T) => T;
+	runVerify: (opts: { verify: VerifyCommand[]; e2e?: E2EConfig; cwd: string }) => Promise<{ ok: boolean }>;
+}
+
+const defaultPostMergeVerifyDeps: PostMergeVerifyDeps = {
+	loadToolConfig,
+	runVerify,
+};
+
+export async function runPostMergeVerify(
 	repoRoot: string,
-	noVerify: boolean
+	noVerify: boolean,
+	deps: PostMergeVerifyDeps = defaultPostMergeVerifyDeps
 ): Promise<boolean> {
 	if (noVerify) return true;
 
@@ -91,13 +191,13 @@ async function runPostMergeVerify(
 		e2e?: E2EConfig;
 	}
 
-	const config = loadToolConfig<ConfigPartial>(repoRoot, 'orchestrator', {
+	const config = deps.loadToolConfig<ConfigPartial>(repoRoot, 'orchestrator', {
 		verify: []
 	});
 
 	if (config.verify.length === 0 && !config.e2e) return true;
 
-	const result = await runVerify({
+	const result = await deps.runVerify({
 		verify: config.verify,
 		e2e: config.e2e,
 		cwd: repoRoot
@@ -128,68 +228,66 @@ Discovers completed orchestrated PRs and merges them in dependency order.
 Handles conflicts interactively with optional Claude-assisted resolution.
 `;
 
-export async function finalize(flags: FinalizeFlags): Promise<void> {
+export async function finalize(flags: FinalizeFlags, deps: FinalizeDeps = defaultFinalizeDeps): Promise<void> {
 	if (flags.help) {
-		console.log(FINALIZE_HELP);
+		deps.print(FINALIZE_HELP);
 		return;
 	}
 
-	console.log('\n\x1b[36m╔══════════════════════════════════════════════╗\x1b[0m');
-	console.log('\x1b[36m║         PAI PR Finalizer                     ║\x1b[0m');
-	console.log('\x1b[36m╚══════════════════════════════════════════════╝\x1b[0m\n');
+	deps.print('\n\x1b[36m╔══════════════════════════════════════════════╗\x1b[0m');
+	deps.print('\x1b[36m║         PAI PR Finalizer                     ║\x1b[0m');
+	deps.print('\x1b[36m╚══════════════════════════════════════════════╝\x1b[0m\n');
 
-	const repoRoot = findRepoRoot();
-	const stateFile = getStateFilePath(repoRoot, 'finalize');
+	const repoRoot = deps.findRepoRoot();
+	const stateFile = deps.getStateFilePath(repoRoot, 'finalize');
 
 	// Discover PRs
-	log.step('DISCOVERING PRs');
-	const prs = await discoverMergeablePRs(repoRoot);
+	deps.log.step('DISCOVERING PRs');
+	const prs = await deps.discoverMergeablePRs(repoRoot);
 	if (prs.length === 0) {
-		log.info('No mergeable PRs found.');
+		deps.log.info('No mergeable PRs found.');
 		return;
 	}
 
 	// Determine order
-	const ordered = determineMergeOrder(prs);
-	log.ok(`Found ${ordered.length} PR(s) to merge`);
+	const ordered = deps.determineMergeOrder(prs);
+	deps.log.ok(`Found ${ordered.length} PR(s) to merge`);
 
 	// Filter by --from
 	let startIdx = 0;
 	if (flags.from !== null) {
 		startIdx = ordered.findIndex((pr) => pr.issueNumber === flags.from);
 		if (startIdx === -1) {
-			log.error(`Issue #${flags.from} not found in merge queue`);
-			process.exit(1);
+			deps.log.error(`Issue #${flags.from} not found in merge queue`);
+			deps.exit(1);
 		}
 	}
 
 	// Show plan
-	log.step('MERGE PLAN');
+	deps.log.step('MERGE PLAN');
 	for (let i = startIdx; i < ordered.length; i++) {
 		const pr = ordered[i];
 		const marker = i === startIdx ? '→' : ' ';
-		console.log(`  ${marker} #${pr.issueNumber} PR #${pr.prNumber} (${pr.branch} → ${pr.baseBranch}) [${flags.strategy}]`);
+		deps.print(`  ${marker} #${pr.issueNumber} PR #${pr.prNumber} (${pr.branch} → ${pr.baseBranch}) [${flags.strategy}]`);
 	}
 
 	if (flags.dryRun) {
-		log.info('\nDry run complete. No changes made.');
+		deps.log.info('\nDry run complete. No changes made.');
 		return;
 	}
 
 	// Load or init state
-	const state = loadFinalizeState(stateFile) ?? initFinalizeState();
+	const state = deps.loadFinalizeState(stateFile) ?? initFinalizeState();
 
 	// Ensure we're on the base branch with latest remote
 	const baseBranch = ordered[startIdx]?.baseBranch ?? 'master';
-	await $`git -C ${repoRoot} checkout ${baseBranch}`.quiet();
-	await $`git -C ${repoRoot} pull --ff-only`.quiet().catch((e) => {
-		log.warn(`Initial pull of ${baseBranch} failed: ${String(e).slice(0, 200)}`);
-	});
+	await deps.gitQuiet(['git', 'checkout', baseBranch], repoRoot);
+	await deps.gitQuiet(['git', 'pull', '--ff-only'], repoRoot);
 
 	// Merge loop
 	for (let i = startIdx; i < ordered.length; i++) {
 		const pr = ordered[i];
-		log.step(`MERGING #${pr.issueNumber} — PR #${pr.prNumber}`);
+		deps.log.step(`MERGING #${pr.issueNumber} — PR #${pr.prNumber}`);
 
 		// Initialize state entry
 		if (!state.prs[pr.prNumber]) {
@@ -207,102 +305,96 @@ export async function finalize(flags: FinalizeFlags): Promise<void> {
 		const prState = state.prs[pr.prNumber];
 
 		// Pull latest base branch before rebase (CI may push version bumps between merges)
-		await $`git -C ${repoRoot} checkout ${baseBranch}`.quiet();
-		await $`git -C ${repoRoot} pull --ff-only`.quiet().catch((e) => {
-			log.warn(`Pre-rebase pull of ${baseBranch} failed: ${String(e).slice(0, 200)}`);
-		});
+		await deps.gitQuiet(['git', 'checkout', baseBranch], repoRoot);
+		await deps.gitQuiet(['git', 'pull', '--ff-only'], repoRoot);
 
 		// Rebase onto target (handles stale branches, stacked PRs, and conflicts)
-		log.info(`Rebasing ${pr.branch} onto ${baseBranch}...`);
-		const rebaseResult = await rebaseBranch(pr.branch, baseBranch, repoRoot);
+		deps.log.info(`Rebasing ${pr.branch} onto ${baseBranch}...`);
+		const rebaseResult = await deps.rebaseBranch(pr.branch, baseBranch, repoRoot);
 
 		if (!rebaseResult.ok) {
 			if (rebaseResult.conflicts && rebaseResult.conflicts.length > 0) {
-				log.warn('Conflicts detected during rebase');
+				deps.log.warn('Conflicts detected during rebase');
 				let resolved: boolean;
 				if (flags.autoResolve) {
-					log.info('Auto-resolving conflicts via Claude...');
-					resolved = await autoResolveConflicts(rebaseResult.conflicts, repoRoot);
+					deps.log.info('Auto-resolving conflicts via Claude...');
+					resolved = await deps.autoResolveConflicts(rebaseResult.conflicts, repoRoot);
 				} else {
-					const intents = await presentConflicts(rebaseResult.conflicts);
-					resolved = await resolveConflicts(rebaseResult.conflicts, intents, repoRoot);
+					const intents = await deps.presentConflicts(rebaseResult.conflicts);
+					resolved = await deps.resolveConflicts(rebaseResult.conflicts, intents, repoRoot);
 				}
 				if (!resolved) {
 					prState.status = 'conflict';
 					prState.error = 'Conflict resolution failed';
-					saveFinalizeState(state, stateFile);
-					log.error(`Failed to resolve conflicts for PR #${pr.prNumber}`);
+					deps.saveFinalizeState(state, stateFile);
+					deps.log.error(`Failed to resolve conflicts for PR #${pr.prNumber}`);
 					continue;
 				}
 			} else {
 				prState.status = 'failed';
 				prState.error = 'Rebase failed (not a conflict)';
-				saveFinalizeState(state, stateFile);
-				log.error(`Rebase failed for PR #${pr.prNumber}`);
+				deps.saveFinalizeState(state, stateFile);
+				deps.log.error(`Rebase failed for PR #${pr.prNumber}`);
 				continue;
 			}
 		}
 
 		// Push rebased branch (always — remote must match local after rebase)
-		await $`git -C ${repoRoot} push --force-with-lease origin ${pr.branch}`.quiet().catch((e) => {
-			log.warn(`Force push failed for ${pr.branch}: ${String(e).slice(0, 200)}`);
-		});
+		await deps.gitQuiet(['git', 'push', '--force-with-lease', 'origin', pr.branch], repoRoot);
 
 		// Retarget dependent PRs before merge (prevents orphaning when branch is deleted)
 		for (const other of ordered) {
 			if (other.baseBranch === pr.branch) {
-				log.info(`Retargeting PR #${other.prNumber} base: ${pr.branch} → ${baseBranch}`);
-				await $`gh pr edit ${other.prNumber} --base ${baseBranch}`.quiet().catch(() => {});
+				deps.log.info(`Retargeting PR #${other.prNumber} base: ${pr.branch} → ${baseBranch}`);
+				await deps.ghQuietSwallow(['gh', 'pr', 'edit', String(other.prNumber), '--base', baseBranch]);
 				other.baseBranch = baseBranch;
 			}
 		}
 
 		// Merge
-		const mergeResult = await mergePR(pr.prNumber, flags.strategy, false);
+		const mergeResult = await deps.mergePR(pr.prNumber, flags.strategy, false);
 		if (!mergeResult.ok) {
 			prState.status = 'failed';
 			prState.error = mergeResult.error ?? 'Merge failed';
-			saveFinalizeState(state, stateFile);
-			log.error(`Failed to merge PR #${pr.prNumber}: ${mergeResult.error}`);
+			deps.saveFinalizeState(state, stateFile);
+			deps.log.error(`Failed to merge PR #${pr.prNumber}: ${mergeResult.error}`);
 			continue;
 		}
 
 		// Pull merged changes (includes squash commit + any CI version bumps)
-		await $`git -C ${repoRoot} checkout ${baseBranch}`.quiet();
-		await $`git -C ${repoRoot} pull --ff-only`.quiet().catch((e) => {
-			log.warn(`Post-merge pull of ${baseBranch} failed: ${String(e).slice(0, 200)}`);
-		});
+		await deps.gitQuiet(['git', 'checkout', baseBranch], repoRoot);
+		await deps.gitQuiet(['git', 'pull', '--ff-only'], repoRoot);
 
 		// Post-merge verification
 		if (!flags.noVerify) {
-			log.info('Running post-merge verification...');
-			const verifyOk = await runPostMergeVerify(repoRoot, false);
+			deps.log.info('Running post-merge verification...');
+			const verifyOk = await deps.runPostMergeVerify(repoRoot, false);
 			if (!verifyOk) {
-				log.warn(`Post-merge verification failed for PR #${pr.prNumber}`);
-				log.warn('Continuing — the merge is already complete. Fix issues manually.');
+				deps.log.warn(`Post-merge verification failed for PR #${pr.prNumber}`);
+				deps.log.warn('Continuing — the merge is already complete. Fix issues manually.');
 			}
 		}
 
 		// Close the associated issue (belt-and-suspenders — PR body also has "Closes #N")
-		await $`gh issue close ${pr.issueNumber}`.quiet().catch(() => {});
+		await deps.ghQuietSwallow(['gh', 'issue', 'close', String(pr.issueNumber)]);
 
 		prState.status = 'merged';
 		prState.mergedAt = new Date().toISOString();
 		prState.error = null;
-		saveFinalizeState(state, stateFile);
-		log.ok(`PR #${pr.prNumber} merged (issue #${pr.issueNumber})`);
+		deps.saveFinalizeState(state, stateFile);
+		deps.log.ok(`PR #${pr.prNumber} merged (issue #${pr.issueNumber})`);
 
 		if (flags.single) {
-			log.info('Single mode — stopping after one merge.');
+			deps.log.info('Single mode — stopping after one merge.');
 			break;
 		}
 	}
 
 	// Summary
-	log.step('SUMMARY');
+	deps.log.step('SUMMARY');
 	const merged = Object.values(state.prs).filter((p) => p.status === 'merged').length;
 	const failed = Object.values(state.prs).filter((p) => p.status === 'failed' || p.status === 'conflict').length;
-	console.log(`  Merged: ${merged}`);
-	if (failed > 0) console.log(`  Failed: ${failed}`);
-	log.ok('Finalize complete');
+	deps.print(`  Merged: ${merged}`);
+	if (failed > 0) deps.print(`  Failed: ${failed}`);
+	deps.log.ok('Finalize complete');
 }

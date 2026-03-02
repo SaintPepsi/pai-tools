@@ -21,18 +21,6 @@ pait <command> [flags]
 
 Automated GitHub issue implementation orchestrator. See [tools/orchestrator/README.md](tools/orchestrator/README.md) for usage, config, and options.
 
-### `pait analyze`
-
-AI-powered file structure analyzer. Two-tier approach: fast heuristics flag candidates, then Claude Sonnet detects SRP/DIP violations and suggests concrete file splits. Supports 10 languages, GitHub issue creation, and JSON output for CI.
-
-```bash
-pait analyze ./src                    # Full analysis
-pait analyze ./src --tier1-only       # Heuristics only (free)
-pait analyze ./src --issues --dry-run # Preview GitHub issues
-```
-
-See [tools/analyze/README.md](tools/analyze/README.md) for full docs, flags, and config.
-
 ### `pait verify`
 
 Standalone verification runner. Reads verify commands from `.pait/orchestrator.json` and runs them. Supports step filtering, E2E skip, and JSON output.
@@ -96,17 +84,6 @@ pai-tools/
     │   ├── README.md               # Finalize tool docs, conflict UX
     │   ├── index.ts                # PR merge with conflict resolution
     │   └── types.ts                # Finalize types (FinalizeFlags, MergeOrder, etc.)
-    └── analyze/
-        ├── README.md               # Analyze tool docs, flags, config
-        ├── index.ts                # Main orchestrator (imports all modules)
-        ├── types.ts                # TypeScript interfaces
-        ├── language-profiles.ts    # Language detection and thresholds
-        ├── cache.ts                # SHA-256 file hashing and analysis cache
-        ├── discovery.ts            # File walker with ignore patterns
-        ├── tier1.ts                # Heuristic analysis (line counts, signals)
-        ├── tier2.ts                # AI semantic analysis via Claude
-        ├── formatters.ts           # Terminal and JSON output rendering
-        └── github.ts               # Label management and issue creation
 ```
 
 ## Requirements

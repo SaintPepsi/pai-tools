@@ -5,9 +5,9 @@ import {
 	printStatus,
 	defaultDisplayDeps,
 	type DisplayDeps,
-} from './display.ts';
-import type { DependencyNode, OrchestratorState, IssueState } from './types.ts';
-import type { GitHubIssue } from '../../shared/github.ts';
+} from '@tools/orchestrator/display.ts';
+import type { DependencyNode, OrchestratorState, IssueState } from '@tools/orchestrator/types.ts';
+import type { GitHubIssue } from '@shared/github.ts';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -15,11 +15,18 @@ import type { GitHubIssue } from '../../shared/github.ts';
 
 function makeDeps(): { lines: string[]; deps: DisplayDeps } {
 	const lines: string[] = [];
-	return { lines, deps: { log: (...args: unknown[]) => lines.push(args.join(' ')) } };
+	const push = (...args: unknown[]) => lines.push(args.map(String).join(' '));
+	return {
+		lines,
+		deps: {
+			log: { step: push, info: push, ok: push, warn: push, error: push, dim: push } as DisplayDeps['log'],
+			consolelog: push,
+		},
+	};
 }
 
 function makeIssue(num: number, title: string): GitHubIssue {
-	return { number: num, title, body: '', labels: [], author: 'user' };
+	return { number: num, title, body: '', state: 'open', labels: [] };
 }
 
 function makeNode(num: number, title: string, dependsOn: number[], branch: string): DependencyNode {
@@ -109,8 +116,9 @@ describe('printParallelPlan', () => {
 		expect(lines.some((l) => l.includes('deps: #1, #2, #3'))).toBe(true);
 	});
 
-	test('defaultDisplayDeps exports console.log', () => {
-		expect(typeof defaultDisplayDeps.log).toBe('function');
+	test('defaultDisplayDeps exports expected properties', () => {
+		expect(typeof defaultDisplayDeps.log).toBe('object');
+		expect(typeof defaultDisplayDeps.consolelog).toBe('function');
 	});
 });
 

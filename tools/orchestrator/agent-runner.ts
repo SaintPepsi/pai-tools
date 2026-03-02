@@ -5,13 +5,14 @@
  * and agent-driven issue implementation via the Claude CLI.
  */
 
-import { log, Spinner } from '../../shared/log.ts';
-import { runClaude } from '../../shared/claude.ts';
-import type { RunClaudeOpts } from '../../shared/claude.ts';
-import type { RunLogger } from '../../shared/logging.ts';
-import type { GitHubIssue, OrchestratorConfig } from './types.ts';
-import { fixVerificationFailure as _fixVerificationFailure } from './verify-fixer.ts';
-import { defaultFsAdapter } from '../../shared/adapters/fs.ts';
+import { log, Spinner } from '@shared/log.ts';
+import { runClaude } from '@shared/claude.ts';
+import type { RunClaudeOpts } from '@shared/claude.ts';
+import type { RunLogger } from '@shared/logging.ts';
+import type { GitHubIssue } from '@shared/github.ts';
+import type { OrchestratorConfig } from '@tools/orchestrator/types.ts';
+import { fixVerificationFailure as _fixVerificationFailure } from '@tools/orchestrator/verify-fixer.ts';
+import { defaultFsAdapter } from '@shared/adapters/fs.ts';
 
 export interface AgentRunnerDeps {
 	runClaude: (opts: RunClaudeOpts) => Promise<{ ok: boolean; output: string }>;

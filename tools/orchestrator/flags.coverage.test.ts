@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test';
-import { parseFlags } from './flags.ts';
-import type { FlagsDeps } from './flags.ts';
+import { parseFlags } from '@tools/orchestrator/flags.ts';
+import type { FlagsDeps } from '@tools/orchestrator/flags.ts';
 
 class ExitError extends Error {
 	code: number;

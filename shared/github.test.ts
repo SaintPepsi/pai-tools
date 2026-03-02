@@ -51,19 +51,19 @@ describe('orchestrator imports from shared/github.ts', () => {
 
 	test('imports fetchOpenIssues from shared/github.ts', async () => {
 		const src = await indexSource.text();
-		expect(src).toContain("from '../../shared/github.ts'");
+		expect(src).toContain("from '@shared/github.ts'");
 		expect(src).toContain('fetchOpenIssues');
 	});
 
 	test('imports createSubIssues from shared/github.ts', async () => {
 		const src = await executionSource.text();
-		expect(src).toContain("from '../../shared/github.ts'");
+		expect(src).toContain("from '@shared/github.ts'");
 		expect(src).toContain('createSubIssues');
 	});
 
 	test('imports createPR from shared/github.ts', async () => {
 		const src = await executionSource.text();
-		expect(src).toContain("from '../../shared/github.ts'");
+		expect(src).toContain("from '@shared/github.ts'");
 		expect(src).toContain('createPR');
 	});
 
@@ -92,7 +92,7 @@ describe('finalize imports from shared/github.ts', () => {
 
 	test('imports discoverMergeablePRs from shared/github.ts', async () => {
 		const src = await source.text();
-		expect(src).toContain("from '../../shared/github.ts'");
+		expect(src).toContain("from '@shared/github.ts'");
 		expect(src).toContain('discoverMergeablePRs');
 	});
 

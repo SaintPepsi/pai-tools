@@ -12,17 +12,17 @@ import {
 	defaultExecutionDeps,
 	type ExecutionDeps,
 	type RunMainLoopOptions,
-} from './execution.ts';
-import { getIssueState } from './state-helpers.ts';
-import { withRetries } from './retry.ts';
+} from '@tools/orchestrator/execution.ts';
+import { getIssueState } from '@tools/orchestrator/state-helpers.ts';
+import { withRetries } from '@tools/orchestrator/retry.ts';
+import type { GitHubIssue } from '@shared/github.ts';
 import type {
 	OrchestratorConfig,
 	OrchestratorFlags,
 	OrchestratorState,
 	DependencyNode,
-	GitHubIssue,
-} from './types.ts';
-import type { RunLogger } from '../../shared/logging.ts';
+} from '@tools/orchestrator/types.ts';
+import type { RunLogger } from '@shared/logging.ts';
 
 // ---------------------------------------------------------------------------
 // Shared fixtures
@@ -62,7 +62,7 @@ const baseFlags: OrchestratorFlags = {
 	singleIssue: null, fromIssue: null, parallel: 1, file: null,
 };
 
-const noopLogger: RunLogger = {
+const noopLogger = {
 	log: () => {},
 	path: '/dev/null',
 	runStart: () => {},
@@ -78,7 +78,7 @@ const noopLogger: RunLogger = {
 	worktreeRemoved: () => {},
 	branchCreated: () => {},
 	prCreated: () => {},
-};
+} as unknown as RunLogger;
 
 const noopLog = {
 	info: () => {}, ok: () => {}, warn: () => {}, error: () => {},

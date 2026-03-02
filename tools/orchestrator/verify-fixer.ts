@@ -6,11 +6,11 @@
  * parallel scheduler (parallel.ts).
  */
 
-import { Spinner } from '../../shared/log.ts';
-import { runClaude } from '../../shared/claude.ts';
-import type { RunClaudeOpts } from '../../shared/claude.ts';
-import type { RunLogger } from '../../shared/logging.ts';
-import type { OrchestratorConfig } from './types.ts';
+import { Spinner } from '@shared/log.ts';
+import { runClaude } from '@shared/claude.ts';
+import type { RunClaudeOpts } from '@shared/claude.ts';
+import type { RunLogger } from '@shared/logging.ts';
+import type { OrchestratorConfig } from '@tools/orchestrator/types.ts';
 
 export interface VerifyFixerDeps {
 	runClaude: (opts: RunClaudeOpts) => Promise<{ ok: boolean; output: string }>;

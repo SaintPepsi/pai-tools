@@ -10,7 +10,7 @@
 import { $ } from 'bun';
 import { readFileSync, appendFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { log } from '../shared/log.ts';
+import { log } from '@shared/log.ts';
 
 const BUN_BIN = join(process.env.HOME ?? '', '.bun', 'bin');
 const PATH_EXPORT_LINE = 'export PATH="$HOME/.bun/bin:$PATH"';

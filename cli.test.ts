@@ -1,20 +1,17 @@
 import { describe, test, expect } from 'bun:test';
-import { readFileSync, existsSync } from 'node:fs';
+import { defaultFsAdapter } from '@shared/adapters/fs.ts';
 import { join } from 'node:path';
 
 describe('CLI help text sync', () => {
-	const cliSource = readFileSync(join(import.meta.dir, 'cli.ts'), 'utf-8');
-	const orchestratorSource = readFileSync(
-		join(import.meta.dir, 'tools/orchestrator/flags.ts'),
-		'utf-8'
+	const cliSource = defaultFsAdapter.readFile(join(import.meta.dir, 'cli.ts'));
+	const orchestratorSource = defaultFsAdapter.readFile(
+		join(import.meta.dir, 'tools/orchestrator/flags.ts')
 	);
-const verifySource = readFileSync(
-		join(import.meta.dir, 'tools/verify/index.ts'),
-		'utf-8'
+	const verifySource = defaultFsAdapter.readFile(
+		join(import.meta.dir, 'tools/verify/index.ts')
 	);
-	const finalizeSource = readFileSync(
-		join(import.meta.dir, 'tools/finalize/index.ts'),
-		'utf-8'
+	const finalizeSource = defaultFsAdapter.readFile(
+		join(import.meta.dir, 'tools/finalize/index.ts')
 	);
 
 	test('every orchestrator flag in parseFlags appears in CLI HELP', () => {
@@ -43,7 +40,7 @@ const verifySource = readFileSync(
 		}
 	});
 
-test('every verify flag in parseVerifyFlags appears in CLI HELP', () => {
+	test('every verify flag in parseVerifyFlags appears in CLI HELP', () => {
 		const parseFlagsMatch = verifySource.match(
 			/function parseVerifyFlags[\s\S]*?^}/m
 		);
@@ -113,12 +110,12 @@ describe('Tool README flag sync', () => {
 
 	for (const tool of tools) {
 		const readmePath = join(import.meta.dir, tool.dir, 'README.md');
-		if (!existsSync(readmePath)) continue;
+		if (!defaultFsAdapter.fileExists(readmePath)) continue;
 
 		test(`every ${tool.name} flag appears in ${tool.dir}/README.md`, () => {
-			const toolSource = readFileSync(join(import.meta.dir, tool.dir, tool.file), 'utf-8');
+			const toolSource = defaultFsAdapter.readFile(join(import.meta.dir, tool.dir, tool.file));
 			const flags = extractFlags(toolSource, tool.fn);
-			const toolReadme = readFileSync(readmePath, 'utf-8');
+			const toolReadme = defaultFsAdapter.readFile(readmePath);
 
 			expect(flags.length).toBeGreaterThan(0);
 

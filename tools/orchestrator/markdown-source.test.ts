@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { parseMarkdownContent } from './markdown-source.ts';
+import { parseMarkdownContent } from '@tools/orchestrator/markdown-source.ts';
 
 // ---------------------------------------------------------------------------
 // parseMarkdownContent

@@ -17,10 +17,10 @@
  *   --no-verify      Skip verification requirement
  */
 
-import { orchestrate, parseFlags } from './tools/orchestrator/index.ts';
-import { verify, parseVerifyFlags } from './tools/verify/index.ts';
-import { finalize, parseFinalizeFlags } from './tools/finalize/index.ts';
-import { setup } from './tools/setup.ts';
+import { orchestrate, parseFlags } from '@tools/orchestrator/index.ts';
+import { verify, parseVerifyFlags } from '@tools/verify/index.ts';
+import { finalize, parseFinalizeFlags } from '@tools/finalize/index.ts';
+import { setup } from '@tools/setup.ts';
 import { $ } from 'bun';
 import { join } from 'node:path';
 

@@ -1,7 +1,7 @@
 import { describe, test, expect } from 'bun:test';
 import { join } from 'node:path';
 import { $ } from 'bun';
-import { migrateStateIfNeeded, getStateFilePath } from './config.ts';
+import { migrateStateIfNeeded, getStateFilePath } from '@shared/config.ts';
 
 describe('migrateStateIfNeeded', () => {
 	test('copies legacy file to new location when new does not exist', async () => {

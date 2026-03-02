@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { promptLine, type PromptDeps } from './prompt.ts';
+import { promptLine, type PromptDeps } from '@shared/prompt.ts';
 
 function makeRlDeps(answer: string): PromptDeps & { closed: boolean; lastQuestion: string } {
 	let closed = false;

@@ -2,10 +2,7 @@
  * Types for the finalize (PR merge) tool.
  */
 
-import type { MergeStrategy } from '../../shared/github.ts';
-
-// Re-exported from shared for backward compatibility
-export type { MergeStrategy, MergeOrder } from '../../shared/github.ts';
+import type { MergeStrategy } from '@shared/github.ts';
 
 export type PRStatus = 'pending' | 'merged' | 'failed' | 'conflict' | 'skipped';
 
@@ -35,5 +32,3 @@ export interface FinalizeState {
 	updatedAt: string;
 	prs: Record<number, PRMergeState>;
 }
-
-export type { ConflictInfo } from '../../shared/git.ts';

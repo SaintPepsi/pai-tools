@@ -5,10 +5,10 @@
  * with GitHub issues or PRs via the gh CLI.
  */
 
-import { log } from './log.ts';
-import { getStateFilePath } from './config.ts';
-import type { FsAdapter } from './adapters/fs.ts';
-import { defaultFsAdapter } from './adapters/fs.ts';
+import { log } from '@shared/log.ts';
+import { getStateFilePath } from '@shared/config.ts';
+import type { FsAdapter } from '@shared/adapters/fs.ts';
+import { defaultFsAdapter } from '@shared/adapters/fs.ts';
 
 // ---------------------------------------------------------------------------
 // Types

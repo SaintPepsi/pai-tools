@@ -6,13 +6,13 @@
  */
 
 import { join, resolve } from 'node:path';
-import { log } from './log.ts';
-import { promptLine, defaultPromptDeps } from './prompt.ts';
-import { runClaude, defaultDeps as defaultClaudeDeps } from './claude.ts';
-import type { RunClaudeOpts } from './claude.ts';
-import type { RunLogger } from './logging.ts';
-import type { FsAdapter } from './adapters/fs.ts';
-import { defaultFsAdapter } from './adapters/fs.ts';
+import { log } from '@shared/log.ts';
+import { promptLine, defaultPromptDeps } from '@shared/prompt.ts';
+import { runClaude, defaultDeps as defaultClaudeDeps } from '@shared/claude.ts';
+import type { RunClaudeOpts } from '@shared/claude.ts';
+import type { RunLogger } from '@shared/logging.ts';
+import type { FsAdapter } from '@shared/adapters/fs.ts';
+import { defaultFsAdapter } from '@shared/adapters/fs.ts';
 
 // ---------------------------------------------------------------------------
 // Types

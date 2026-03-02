@@ -39,9 +39,10 @@ import {
 	implementIssue,
 	defaultAgentRunnerDeps,
 	type AgentRunnerDeps,
-} from './agent-runner.ts';
-import type { OrchestratorConfig, GitHubIssue } from './types.ts';
-import type { RunLogger } from '../../shared/logging.ts';
+} from '@tools/orchestrator/agent-runner.ts';
+import type { OrchestratorConfig } from '@tools/orchestrator/types.ts';
+import type { GitHubIssue } from '@shared/github.ts';
+import type { RunLogger } from '@shared/logging.ts';
 
 // ---------------------------------------------------------------------------
 // Shared fixtures
@@ -64,7 +65,7 @@ const baseConfig: OrchestratorConfig = {
 	],
 };
 
-const noopLogger: RunLogger = {
+const noopLogger = {
 	log: () => {},
 	path: '/dev/null',
 	runStart: () => {},
@@ -80,7 +81,7 @@ const noopLogger: RunLogger = {
 	worktreeRemoved: () => {},
 	branchCreated: () => {},
 	prCreated: () => {},
-};
+} as unknown as RunLogger;
 
 // ---------------------------------------------------------------------------
 // Mock deps builder
@@ -370,10 +371,10 @@ describe('implementIssue — happy path', () => {
 
 	test('calls logger.agentOutput with issue number and full output', async () => {
 		const agentOutputCalls: { issueNumber: number; output: string }[] = [];
-		const logger: RunLogger = {
+		const logger = {
 			...noopLogger,
-			agentOutput: (n, o) => { agentOutputCalls.push({ issueNumber: n, output: o }); },
-		};
+			agentOutput: (n: number, o: string) => { agentOutputCalls.push({ issueNumber: n, output: o }); },
+		} as unknown as RunLogger;
 		const { deps } = makeDeps({ runClaudeOk: true, runClaudeOutput: 'implemented feature' });
 
 		await implementIssue({

@@ -3,9 +3,9 @@ import { $ } from 'bun';
 import { mkdtempSync, existsSync, rmSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createWorktree, removeWorktree, localBranchExists, deleteLocalBranch } from '../../shared/git.ts';
-import { RunLogger } from '../../shared/logging.ts';
-import type { OrchestratorConfig } from './types.ts';
+import { createWorktree, removeWorktree, localBranchExists, deleteLocalBranch } from '@shared/git.ts';
+import { RunLogger } from '@shared/logging.ts';
+import type { OrchestratorConfig } from '@tools/orchestrator/types.ts';
 
 const testConfig: OrchestratorConfig = {
 	branchPrefix: 'feat/',

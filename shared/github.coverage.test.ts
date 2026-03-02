@@ -4,8 +4,8 @@
  */
 
 import { describe, test, expect, mock } from 'bun:test';
-import type { GithubDeps } from './github.ts';
-import type { FsAdapter } from './adapters/fs.ts';
+import type { GithubDeps } from '@shared/github.ts';
+import type { FsAdapter } from '@shared/adapters/fs.ts';
 import {
 	fetchOpenIssues,
 	createSubIssues,
@@ -14,8 +14,8 @@ import {
 	discoverMergeablePRs,
 	mergePR,
 	defaultGithubDeps,
-} from './github.ts';
-import type { GitHubIssue, MergeOrder } from './github.ts';
+} from '@shared/github.ts';
+import type { GitHubIssue, MergeOrder } from '@shared/github.ts';
 
 // ---------------------------------------------------------------------------
 // Helpers

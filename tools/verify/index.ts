@@ -5,20 +5,16 @@
  * Interactive config prompt: `tools/orchestrator/prompt.ts`
  */
 
-import { log } from '../../shared/log.ts';
-import { findRepoRoot, loadToolConfig } from '../../shared/config.ts';
-import { runVerify } from './runner.ts';
+import { log } from '@shared/log.ts';
+import { findRepoRoot, loadToolConfig } from '@shared/config.ts';
+import { runVerify } from '@tools/verify/runner.ts';
 import type {
 	VerifyCommand,
 	VerifyFlags,
 	VerifyOptions,
 	VerifyResult,
 	VerifyStepResult
-} from './types.ts';
-
-// Re-export types and runner for convenience
-export type { VerifyCommand, VerifyFlags, VerifyOptions, VerifyResult, VerifyStepResult } from './types.ts';
-export { runVerify } from './runner.ts';
+} from '@tools/verify/types.ts';
 
 // ---------------------------------------------------------------------------
 // Flag parsing
@@ -68,7 +64,8 @@ interface OrchestratorConfigPartial {
 // ---------------------------------------------------------------------------
 
 export interface VerifyDeps {
-	log: (...args: unknown[]) => void;
+	log: typeof log;
+	consolelog: (...args: unknown[]) => void;
 	exit: (code: number) => never;
 	findRepoRoot: () => string;
 	loadToolConfig: <T>(repoRoot: string, toolName: string, defaults: T) => T;
@@ -76,7 +73,8 @@ export interface VerifyDeps {
 }
 
 export const defaultVerifyDeps: VerifyDeps = {
-	log: console.log,
+	log,
+	consolelog: console.log,
 	exit: process.exit as (code: number) => never,
 	findRepoRoot,
 	loadToolConfig,
@@ -85,7 +83,7 @@ export const defaultVerifyDeps: VerifyDeps = {
 
 export async function verify(flags: VerifyFlags, deps: VerifyDeps = defaultVerifyDeps): Promise<void> {
 	if (flags.help) {
-		deps.log(VERIFY_HELP);
+		deps.consolelog(VERIFY_HELP);
 		return;
 	}
 
@@ -95,8 +93,8 @@ export async function verify(flags: VerifyFlags, deps: VerifyDeps = defaultVerif
 	});
 
 	if (config.verify.length === 0 && !config.e2e) {
-		log.error('No verification commands configured in .pait/orchestrator.json');
-		log.info('Run `pait orchestrate` first to configure verification steps.');
+		deps.log.error('No verification commands configured in .pait/orchestrator.json');
+		deps.log.info('Run `pait orchestrate` first to configure verification steps.');
 		deps.exit(1);
 	}
 
@@ -109,20 +107,20 @@ export async function verify(flags: VerifyFlags, deps: VerifyDeps = defaultVerif
 	});
 
 	if (flags.json) {
-		deps.log(JSON.stringify(result, null, 2));
+		deps.consolelog(JSON.stringify(result, null, 2));
 		return;
 	}
 
 	if (result.ok) {
-		log.ok(`All ${result.steps.length} verification step(s) passed`);
+		deps.log.ok(`All ${result.steps.length} verification step(s) passed`);
 		for (const step of result.steps) {
-			log.dim(`  ${step.name} (${step.durationMs}ms)`);
+			deps.log.dim(`  ${step.name} (${step.durationMs}ms)`);
 		}
 	} else {
-		log.error(`Verification failed at ${result.failedStep}`);
+		deps.log.error(`Verification failed at ${result.failedStep}`);
 		for (const step of result.steps) {
 			const icon = step.ok ? '\x1b[32m✓\x1b[0m' : '\x1b[31m✗\x1b[0m';
-			deps.log(`  ${icon} ${step.name} (${step.durationMs}ms)`);
+			deps.consolelog(`  ${icon} ${step.name} (${step.durationMs}ms)`);
 		}
 		deps.exit(1);
 	}

@@ -6,15 +6,15 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { orchestrate, defaultOrchestrateDeps, type OrchestrateDeps } from './index.ts';
+import { orchestrate, defaultOrchestrateDeps, type OrchestrateDeps } from '@tools/orchestrator/index.ts';
+import type { GitHubIssue } from '@shared/github.ts';
 import type {
 	OrchestratorConfig,
 	OrchestratorFlags,
 	OrchestratorState,
 	DependencyNode,
-	GitHubIssue,
-} from './types.ts';
-import type { RunLogger } from '../../shared/logging.ts';
+} from '@tools/orchestrator/types.ts';
+import type { RunLogger } from '@shared/logging.ts';
 
 // ---------------------------------------------------------------------------
 // Shared fixtures
@@ -478,7 +478,7 @@ describe('orchestrate — dry-run', () => {
 
 		await orchestrate(flags, deps);
 
-		expect(capturedState).toBe(existingState);
+		expect(capturedState!).toBe(existingState);
 	});
 
 	test('uses fresh state when no state file for dry-run', async () => {
@@ -495,7 +495,7 @@ describe('orchestrate — dry-run', () => {
 
 		await orchestrate(flags, deps);
 
-		expect(capturedState).toBe(freshState);
+		expect(capturedState!).toBe(freshState);
 	});
 });
 
@@ -545,7 +545,7 @@ describe('orchestrate — main loop dispatch', () => {
 
 		await orchestrate(baseFlags, deps);
 
-		expect(capturedState).toBe(existingState);
+		expect(capturedState!).toBe(existingState);
 	});
 
 	test('uses fresh initState when no state file', async () => {
@@ -561,7 +561,7 @@ describe('orchestrate — main loop dispatch', () => {
 
 		await orchestrate(baseFlags, deps);
 
-		expect(capturedState).toBe(freshState);
+		expect(capturedState!).toBe(freshState);
 	});
 
 	test('run mode is "full" for sequential non-single', async () => {

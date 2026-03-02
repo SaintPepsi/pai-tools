@@ -3,8 +3,8 @@
  */
 
 import { join } from 'node:path';
-import type { FsAdapter } from './adapters/fs.ts';
-import { defaultFsAdapter } from './adapters/fs.ts';
+import type { FsAdapter } from '@shared/adapters/fs.ts';
+import { defaultFsAdapter } from '@shared/adapters/fs.ts';
 
 export interface StateDeps {
 	fs: FsAdapter;

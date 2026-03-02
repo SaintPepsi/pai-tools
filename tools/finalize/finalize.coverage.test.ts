@@ -14,8 +14,9 @@ import {
 	initFinalizeState,
 	type FinalizeDeps,
 	type PostMergeVerifyDeps,
-} from './index.ts';
-import type { FinalizeFlags, FinalizeState, MergeOrder } from './index.ts';
+} from '@tools/finalize/index.ts';
+import type { FinalizeFlags, FinalizeState } from '@tools/finalize/types.ts';
+import type { MergeOrder } from '@shared/github.ts';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -72,6 +73,7 @@ function makeDeps(overrides: Partial<FinalizeDeps> = {}): { deps: FinalizeDeps; 
 			warn: (msg) => { track('log.warn', msg); },
 			error: (msg) => { track('log.error', msg); },
 			step: (msg) => { track('log.step', msg); },
+			dim: (msg) => { track('log.dim', msg); },
 		},
 		print: (msg) => { printed.push(msg); },
 		...overrides,
@@ -705,62 +707,62 @@ describe('finalize — summary', () => {
 describe('runPostMergeVerify — injectable deps', () => {
 	test('returns true when noVerify=true without touching deps', async () => {
 		let loadCalled = false;
-		const deps: PostMergeVerifyDeps = {
+		const deps = {
 			loadToolConfig: () => { loadCalled = true; return { verify: [] }; },
 			runVerify: async () => ({ ok: true }),
-		};
+		} as PostMergeVerifyDeps;
 		const result = await runPostMergeVerify('/any', true, deps);
 		expect(result).toBe(true);
 		expect(loadCalled).toBe(false);
 	});
 
 	test('returns true when config has no verify commands and no e2e', async () => {
-		const deps: PostMergeVerifyDeps = {
+		const deps = {
 			loadToolConfig: () => ({ verify: [] }),
 			runVerify: async () => ({ ok: false }), // should not be called
-		};
+		} as PostMergeVerifyDeps;
 		const result = await runPostMergeVerify('/repo', false, deps);
 		expect(result).toBe(true);
 	});
 
 	test('returns true when config has no verify commands and no e2e (e2e undefined)', async () => {
-		const deps: PostMergeVerifyDeps = {
+		const deps = {
 			loadToolConfig: () => ({ verify: [], e2e: undefined }),
 			runVerify: async () => ({ ok: false }),
-		};
+		} as PostMergeVerifyDeps;
 		const result = await runPostMergeVerify('/repo', false, deps);
 		expect(result).toBe(true);
 	});
 
 	test('calls runVerify when verify commands are present and returns its result', async () => {
 		let verifyCalled = false;
-		const deps: PostMergeVerifyDeps = {
+		const deps = {
 			loadToolConfig: () => ({ verify: [{ name: 'test', cmd: 'bun test' }] }),
 			runVerify: async () => { verifyCalled = true; return { ok: true }; },
-		};
+		} as PostMergeVerifyDeps;
 		const result = await runPostMergeVerify('/repo', false, deps);
 		expect(verifyCalled).toBe(true);
 		expect(result).toBe(true);
 	});
 
 	test('returns false when runVerify fails', async () => {
-		const deps: PostMergeVerifyDeps = {
+		const deps = {
 			loadToolConfig: () => ({ verify: [{ name: 'test', cmd: 'bun test' }] }),
 			runVerify: async () => ({ ok: false }),
-		};
+		} as PostMergeVerifyDeps;
 		const result = await runPostMergeVerify('/repo', false, deps);
 		expect(result).toBe(false);
 	});
 
 	test('calls runVerify when e2e is configured even with no verify commands', async () => {
 		let verifyCalled = false;
-		const deps: PostMergeVerifyDeps = {
+		const deps = {
 			loadToolConfig: () => ({
 				verify: [],
 				e2e: { run: 'bun e2e', update: 'bun e2e --update', snapshotGlob: '**/*.snap' }
 			}),
 			runVerify: async () => { verifyCalled = true; return { ok: true }; },
-		};
+		} as PostMergeVerifyDeps;
 		const result = await runPostMergeVerify('/repo', false, deps);
 		expect(verifyCalled).toBe(true);
 		expect(result).toBe(true);

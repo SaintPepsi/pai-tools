@@ -1,13 +1,14 @@
 /**
  * Coverage tests for tools/orchestrator/dry-run.ts
  *
- * Uses mock AgentRunnerDeps and controlled state/config/flags to exercise
+ * Uses mock DryRunDeps and controlled state/config/flags to exercise
  * every branch in runDryRun without real Claude CLI invocations.
  */
 
-import { describe, test, expect, spyOn, mock } from 'bun:test';
-import type { OrchestratorState, OrchestratorConfig, OrchestratorFlags, DependencyNode } from './types.ts';
-import type { AssessSizeResult } from './agent-runner.ts';
+import { describe, test, expect } from 'bun:test';
+import { runDryRun, type DryRunDeps } from '@tools/orchestrator/dry-run.ts';
+import type { OrchestratorState, OrchestratorConfig, OrchestratorFlags, DependencyNode } from '@tools/orchestrator/types.ts';
+import type { AssessSizeResult } from '@tools/orchestrator/agent-runner.ts';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -71,11 +72,31 @@ function makeSplitAssessment(splits: { title: string; body: string }[]): AssessS
 }
 
 // ---------------------------------------------------------------------------
-// Module-level mock for assessIssueSize
+// Mock deps factory
 // ---------------------------------------------------------------------------
 
-// We mock the agent-runner module so runDryRun never calls Claude.
-const agentRunner = await import('./agent-runner.ts');
+function mockLog() {
+	const noop = (..._args: unknown[]) => {};
+	return { step: noop, info: noop, ok: noop, warn: noop, error: noop, dim: noop } as DryRunDeps['log'];
+}
+
+function makeDeps(assessFn?: DryRunDeps['assessIssueSize']): DryRunDeps {
+	return {
+		log: mockLog(),
+		consolelog: () => {},
+		exit: ((code: number) => { throw new Error(`process.exit(${code})`); }) as (code: number) => never,
+		assessIssueSize: assessFn ?? (async () => makeNoSplitAssessment()),
+	};
+}
+
+function makeCountingAssessFn(result: AssessSizeResult = makeNoSplitAssessment()): { fn: DryRunDeps['assessIssueSize']; calls: number[] } {
+	const tracker = { fn: null as unknown as DryRunDeps['assessIssueSize'], calls: [] as number[] };
+	tracker.fn = (async (...args: unknown[]) => {
+		tracker.calls.push(1);
+		return result;
+	}) as DryRunDeps['assessIssueSize'];
+	return tracker;
+}
 
 // ---------------------------------------------------------------------------
 // runDryRun — full range mode (singleMode: false)
@@ -83,88 +104,77 @@ const agentRunner = await import('./agent-runner.ts');
 
 describe('runDryRun — full range (singleMode false)', () => {
 	test('runs over all issues and prints summary', async () => {
-		const spy = spyOn(agentRunner, 'assessIssueSize').mockResolvedValue(makeNoSplitAssessment());
-
-		const { runDryRun } = await import('./dry-run.ts');
+		const tracker = makeCountingAssessFn();
+		const deps = makeDeps(tracker.fn);
 		const graph = makeGraph([makeNode(1, 'Issue One'), makeNode(2, 'Issue Two')]);
 		const state = makeState();
 		const config = makeConfig();
 		const flags = makeFlags();
 
-		await runDryRun([1, 2], graph, state, config, flags, '/repo');
+		await runDryRun([1, 2], graph, state, config, flags, '/repo', deps);
 
-		expect(spy).toHaveBeenCalledTimes(2);
-		spy.mockRestore();
+		expect(tracker.calls.length).toBe(2);
 	});
 
 	test('skips already-completed issues', async () => {
-		const spy = spyOn(agentRunner, 'assessIssueSize').mockResolvedValue(makeNoSplitAssessment());
-
-		const { runDryRun } = await import('./dry-run.ts');
+		const tracker = makeCountingAssessFn();
+		const deps = makeDeps(tracker.fn);
 		const graph = makeGraph([makeNode(1, 'Done Issue'), makeNode(2, 'Pending Issue')]);
 		const state = makeState({
 			1: { number: 1, title: 'Done Issue', status: 'completed', branch: null, baseBranch: null, prNumber: null, error: null, completedAt: null, subIssues: null },
 		});
 		const flags = makeFlags();
 
-		await runDryRun([1, 2], graph, state, makeConfig(), flags, '/repo');
+		await runDryRun([1, 2], graph, state, makeConfig(), flags, '/repo', deps);
 
 		// assessIssueSize should only be called for issue 2 (issue 1 is completed)
-		expect(spy).toHaveBeenCalledTimes(1);
-		spy.mockRestore();
+		expect(tracker.calls.length).toBe(1);
 	});
 
 	test('continues when graph node is missing for an issue', async () => {
-		const spy = spyOn(agentRunner, 'assessIssueSize').mockResolvedValue(makeNoSplitAssessment());
-
-		const { runDryRun } = await import('./dry-run.ts');
+		const tracker = makeCountingAssessFn();
+		const deps = makeDeps(tracker.fn);
 		// graph only has node for issue 2, not issue 1
 		const graph = makeGraph([makeNode(2, 'Issue Two')]);
 		const state = makeState();
 		const flags = makeFlags();
 
 		// Should not throw; issue 1 is skipped because graph.get(1) returns undefined
-		await runDryRun([1, 2], graph, state, makeConfig(), flags, '/repo');
+		await runDryRun([1, 2], graph, state, makeConfig(), flags, '/repo', deps);
 
-		expect(spy).toHaveBeenCalledTimes(1);
-		spy.mockRestore();
+		expect(tracker.calls.length).toBe(1);
 	});
 
 	test('shows split assessment when shouldSplit is true', async () => {
 		const splits = [{ title: 'Sub A', body: 'body A' }, { title: 'Sub B', body: 'body B' }];
-		const spy = spyOn(agentRunner, 'assessIssueSize').mockResolvedValue(makeSplitAssessment(splits));
-
-		const { runDryRun } = await import('./dry-run.ts');
+		const tracker = makeCountingAssessFn(makeSplitAssessment(splits));
+		const deps = makeDeps(tracker.fn);
 		const graph = makeGraph([makeNode(1, 'Big Issue')]);
 		const state = makeState();
 
 		// Should complete without error even when split is recommended
-		await runDryRun([1], graph, state, makeConfig(), makeFlags(), '/repo');
+		await runDryRun([1], graph, state, makeConfig(), makeFlags(), '/repo', deps);
 
-		expect(spy).toHaveBeenCalledTimes(1);
-		spy.mockRestore();
+		expect(tracker.calls.length).toBe(1);
 	});
 
 	test('shows verify step names in summary', async () => {
-		const spy = spyOn(agentRunner, 'assessIssueSize').mockResolvedValue(makeNoSplitAssessment());
-
-		const { runDryRun } = await import('./dry-run.ts');
+		const tracker = makeCountingAssessFn();
+		const deps = makeDeps(tracker.fn);
 		const config = makeConfig({
 			verify: [{ name: 'typecheck', cmd: 'bun tsc' }, { name: 'test', cmd: 'bun test' }],
 		});
 		const graph = makeGraph([makeNode(1, 'Issue One')]);
 		const state = makeState();
 
-		await runDryRun([1], graph, state, config, makeFlags(), '/repo');
+		await runDryRun([1], graph, state, config, makeFlags(), '/repo', deps);
 
-		expect(spy).toHaveBeenCalledTimes(1);
-		spy.mockRestore();
+		expect(tracker.calls.length).toBe(1);
 	});
 
 	test('shows e2e label when e2e configured and skipE2e is false', async () => {
-		const spy = spyOn(agentRunner, 'assessIssueSize').mockResolvedValue(makeNoSplitAssessment());
-
-		const { runDryRun } = await import('./dry-run.ts');
+		const tracker = makeCountingAssessFn();
+		const deps = makeDeps(tracker.fn);
 		const config = makeConfig({
 			verify: [],
 			e2e: { run: 'bun e2e', update: 'bun e2e --update', snapshotGlob: '**/*.snap' },
@@ -173,14 +183,12 @@ describe('runDryRun — full range (singleMode false)', () => {
 		const state = makeState();
 		const flags = makeFlags({ skipE2e: false });
 
-		await runDryRun([1], graph, state, config, flags, '/repo');
-		spy.mockRestore();
+		await runDryRun([1], graph, state, config, flags, '/repo', deps);
 	});
 
 	test('omits e2e label when skipE2e is true', async () => {
-		const spy = spyOn(agentRunner, 'assessIssueSize').mockResolvedValue(makeNoSplitAssessment());
-
-		const { runDryRun } = await import('./dry-run.ts');
+		const tracker = makeCountingAssessFn();
+		const deps = makeDeps(tracker.fn);
 		const config = makeConfig({
 			e2e: { run: 'bun e2e', update: 'bun e2e --update', snapshotGlob: '**/*.snap' },
 		});
@@ -188,35 +196,30 @@ describe('runDryRun — full range (singleMode false)', () => {
 		const state = makeState();
 		const flags = makeFlags({ skipE2e: true });
 
-		await runDryRun([1], graph, state, config, flags, '/repo');
-		spy.mockRestore();
+		await runDryRun([1], graph, state, config, flags, '/repo', deps);
 	});
 
 	test('shows dep branches when issue depends on others', async () => {
-		const spy = spyOn(agentRunner, 'assessIssueSize').mockResolvedValue(makeNoSplitAssessment());
-
-		const { runDryRun } = await import('./dry-run.ts');
+		const tracker = makeCountingAssessFn();
+		const deps = makeDeps(tracker.fn);
 		const graph = makeGraph([makeNode(2, 'Dependent Issue', [1])]);
 		const state = makeState();
 
-		await runDryRun([2], graph, state, makeConfig(), makeFlags(), '/repo');
+		await runDryRun([2], graph, state, makeConfig(), makeFlags(), '/repo', deps);
 
-		expect(spy).toHaveBeenCalledTimes(1);
-		spy.mockRestore();
+		expect(tracker.calls.length).toBe(1);
 	});
 
 	test('skips assessment when skipSplit flag is set', async () => {
-		const spy = spyOn(agentRunner, 'assessIssueSize').mockResolvedValue(makeNoSplitAssessment());
-
-		const { runDryRun } = await import('./dry-run.ts');
+		const tracker = makeCountingAssessFn();
+		const deps = makeDeps(tracker.fn);
 		const graph = makeGraph([makeNode(1, 'Issue One')]);
 		const state = makeState();
 		const flags = makeFlags({ skipSplit: true });
 
-		await runDryRun([1], graph, state, makeConfig(), flags, '/repo');
+		await runDryRun([1], graph, state, makeConfig(), flags, '/repo', deps);
 
-		expect(spy).not.toHaveBeenCalled();
-		spy.mockRestore();
+		expect(tracker.calls.length).toBe(0);
 	});
 });
 
@@ -226,36 +229,27 @@ describe('runDryRun — full range (singleMode false)', () => {
 
 describe('runDryRun — singleMode with explicit singleIssue', () => {
 	test('processes only the specified single issue', async () => {
-		const spy = spyOn(agentRunner, 'assessIssueSize').mockResolvedValue(makeNoSplitAssessment());
-
-		const { runDryRun } = await import('./dry-run.ts');
+		const tracker = makeCountingAssessFn();
+		const deps = makeDeps(tracker.fn);
 		const graph = makeGraph([makeNode(1, 'Issue One'), makeNode(2, 'Issue Two'), makeNode(3, 'Issue Three')]);
 		const state = makeState();
 		const flags = makeFlags({ singleMode: true, singleIssue: 2 });
 
-		await runDryRun([1, 2, 3], graph, state, makeConfig(), flags, '/repo');
+		await runDryRun([1, 2, 3], graph, state, makeConfig(), flags, '/repo', deps);
 
 		// Only issue 2 should be assessed
-		expect(spy).toHaveBeenCalledTimes(1);
-		spy.mockRestore();
+		expect(tracker.calls.length).toBe(1);
 	});
 
 	test('exits with error when singleIssue not found in execution order', async () => {
-		const { runDryRun } = await import('./dry-run.ts');
+		const deps = makeDeps();
 		const graph = makeGraph([makeNode(1, 'Issue One')]);
 		const state = makeState();
 		const flags = makeFlags({ singleMode: true, singleIssue: 99 });
 
-		// process.exit(1) will throw in test environment
-		const exitSpy = spyOn(process, 'exit').mockImplementation((() => {
-			throw new Error('process.exit called');
-		}) as () => never);
-
 		await expect(
-			runDryRun([1], graph, state, makeConfig(), flags, '/repo')
-		).rejects.toThrow('process.exit called');
-
-		exitSpy.mockRestore();
+			runDryRun([1], graph, state, makeConfig(), flags, '/repo', deps)
+		).rejects.toThrow('process.exit(1)');
 	});
 });
 
@@ -265,34 +259,30 @@ describe('runDryRun — singleMode with explicit singleIssue', () => {
 
 describe('runDryRun — singleMode finding next pending issue', () => {
 	test('processes first non-completed issue when singleIssue is null', async () => {
-		const spy = spyOn(agentRunner, 'assessIssueSize').mockResolvedValue(makeNoSplitAssessment());
-
-		const { runDryRun } = await import('./dry-run.ts');
+		const tracker = makeCountingAssessFn();
+		const deps = makeDeps(tracker.fn);
 		const graph = makeGraph([makeNode(1, 'Done'), makeNode(2, 'Pending')]);
 		const state = makeState({
 			1: { number: 1, title: 'Done', status: 'completed', branch: null, baseBranch: null, prNumber: null, error: null, completedAt: null, subIssues: null },
 		});
 		const flags = makeFlags({ singleMode: true, singleIssue: null });
 
-		await runDryRun([1, 2], graph, state, makeConfig(), flags, '/repo');
+		await runDryRun([1, 2], graph, state, makeConfig(), flags, '/repo', deps);
 
 		// Only issue 2 (first non-completed) should be assessed
-		expect(spy).toHaveBeenCalledTimes(1);
-		spy.mockRestore();
+		expect(tracker.calls.length).toBe(1);
 	});
 
 	test('processes first issue when all issues are pending (no state)', async () => {
-		const spy = spyOn(agentRunner, 'assessIssueSize').mockResolvedValue(makeNoSplitAssessment());
-
-		const { runDryRun } = await import('./dry-run.ts');
+		const tracker = makeCountingAssessFn();
+		const deps = makeDeps(tracker.fn);
 		const graph = makeGraph([makeNode(1, 'Issue One'), makeNode(2, 'Issue Two')]);
 		const state = makeState();
 		const flags = makeFlags({ singleMode: true, singleIssue: null });
 
-		await runDryRun([1, 2], graph, state, makeConfig(), flags, '/repo');
+		await runDryRun([1, 2], graph, state, makeConfig(), flags, '/repo', deps);
 
 		// Only issue 1 (first pending) should be assessed
-		expect(spy).toHaveBeenCalledTimes(1);
-		spy.mockRestore();
+		expect(tracker.calls.length).toBe(1);
 	});
 });

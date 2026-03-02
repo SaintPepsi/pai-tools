@@ -6,29 +6,22 @@
  */
 
 import { $ } from 'bun';
-import { log } from '../../shared/log.ts';
-import { findRepoRoot, loadToolConfig, getStateFilePath } from '../../shared/config.ts';
-import { loadState, saveState } from '../../shared/state.ts';
-import { discoverMergeablePRs, determineMergeOrder, mergePR } from '../../shared/github.ts';
-import { runVerify } from '../verify/runner.ts';
-import type { VerifyCommand, E2EConfig, VerifyResult } from '../verify/types.ts';
+import { log } from '@shared/log.ts';
+import { findRepoRoot, loadToolConfig, getStateFilePath } from '@shared/config.ts';
+import { loadState, saveState } from '@shared/state.ts';
+import { discoverMergeablePRs, determineMergeOrder, mergePR } from '@shared/github.ts';
+import { runVerify } from '@tools/verify/runner.ts';
+import type { VerifyCommand, E2EConfig, VerifyResult } from '@tools/verify/types.ts';
 import {
 	rebaseBranch, detectConflicts, presentConflicts, resolveConflicts, autoResolveConflicts
-} from '../../shared/git.ts';
-export { rebaseBranch, detectConflicts, presentConflicts, resolveConflicts, autoResolveConflicts } from '../../shared/git.ts';
-import type { ConflictInfo } from '../../shared/git.ts';
+} from '@shared/git.ts';
+import type { ConflictInfo } from '@shared/git.ts';
+import type { MergeStrategy, MergeOrder } from '@shared/github.ts';
 import type {
 	FinalizeFlags,
 	FinalizeState,
 	PRMergeState,
-	MergeStrategy
-} from './types.ts';
-import type { MergeOrder } from '../../shared/github.ts';
-
-// Re-export types and shared GitHub operations
-export type { FinalizeFlags, FinalizeState, PRMergeState } from './types.ts';
-export type { MergeOrder } from '../../shared/github.ts';
-export { discoverMergeablePRs, determineMergeOrder } from '../../shared/github.ts';
+} from '@tools/finalize/types.ts';
 
 // ---------------------------------------------------------------------------
 // Dependency injection
@@ -68,13 +61,7 @@ export interface FinalizeDeps {
 	/** Call process.exit (injectable for tests). */
 	exit: (code: number) => never;
 	/** Log functions (injectable for tests). */
-	log: {
-		info: (msg: string) => void;
-		ok: (msg: string) => void;
-		warn: (msg: string) => void;
-		error: (msg: string) => void;
-		step: (msg: string) => void;
-	};
+	log: typeof log;
 	/** Console output (injectable for tests). */
 	print: (msg: string) => void;
 }

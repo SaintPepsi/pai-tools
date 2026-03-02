@@ -1,5 +1,5 @@
 import { describe, test, expect, spyOn } from 'bun:test';
-import { runClaude, defaultDeps, type ClaudeDeps, type ClaudeProcess, type RunClaudeOpts } from './claude.ts';
+import { runClaude, defaultDeps, type ClaudeDeps, type ClaudeProcess, type RunClaudeOpts } from '@shared/claude.ts';
 
 function makeProc(output: string, exitCode: number): ClaudeProcess {
 	const encoder = new TextEncoder();

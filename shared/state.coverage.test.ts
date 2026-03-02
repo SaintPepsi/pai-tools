@@ -1,9 +1,9 @@
 import { describe, test, expect } from 'bun:test';
 import { $ } from 'bun';
 import { join } from 'node:path';
-import { clearState, loadState, saveState } from './state.ts';
-import type { StateDeps } from './state.ts';
-import type { FsAdapter } from './adapters/fs.ts';
+import { clearState, loadState, saveState } from '@shared/state.ts';
+import type { StateDeps } from '@shared/state.ts';
+import type { FsAdapter } from '@shared/adapters/fs.ts';
 
 function makeMockFs(overrides: Partial<FsAdapter> = {}): FsAdapter {
 	return {

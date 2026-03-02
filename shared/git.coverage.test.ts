@@ -4,9 +4,9 @@
  */
 
 import { describe, test, expect, mock } from 'bun:test';
-import type { GitDeps } from './git.ts';
-import type { FsAdapter } from './adapters/fs.ts';
-import type { RunClaudeOpts } from './claude.ts';
+import type { GitDeps } from '@shared/git.ts';
+import type { FsAdapter } from '@shared/adapters/fs.ts';
+import type { RunClaudeOpts } from '@shared/claude.ts';
 import {
 	localBranchExists,
 	deleteLocalBranch,
@@ -18,8 +18,8 @@ import {
 	resolveConflicts,
 	autoResolveConflicts,
 	defaultGitDeps,
-} from './git.ts';
-import type { RunLogger } from './logging.ts';
+} from '@shared/git.ts';
+import type { RunLogger } from '@shared/logging.ts';
 
 // ---------------------------------------------------------------------------
 // Helpers

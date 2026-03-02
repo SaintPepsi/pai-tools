@@ -6,8 +6,8 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { promptForVerifyCommands } from './prompt.ts';
-import type { OrchestratorPromptDeps } from './prompt.ts';
+import { promptForVerifyCommands } from '@tools/orchestrator/prompt.ts';
+import type { OrchestratorPromptDeps } from '@tools/orchestrator/prompt.ts';
 
 // ---------------------------------------------------------------------------
 // Helpers

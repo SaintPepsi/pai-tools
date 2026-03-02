@@ -11,7 +11,12 @@
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
-    "isolatedModules": true
+    "isolatedModules": true,
+    "baseUrl": ".",
+    "paths": {
+      "@shared/*": ["shared/*"],
+      "@tools/*": ["tools/*"]
+    }
   },
   "include": ["**/*.ts"],
   "exclude": ["node_modules"]

@@ -63,7 +63,7 @@ describe('finalize source guards (regression)', () => {
 		// Regression: promptLine was duplicated in verify and finalize.
 		// After extraction, promptLine is used in shared/git.ts.
 		expect(source).not.toContain('function promptLine');
-		expect(gitSource).toContain("from './prompt.ts'");
+		expect(gitSource).toContain("from '@shared/prompt.ts'");
 	});
 });
 
@@ -80,13 +80,13 @@ describe('shared promptLine module', () => {
 		).text();
 		expect(verifySource).not.toContain('function promptLine');
 		// verify/index.ts must not import shared/prompt.ts after refactor
-		expect(verifySource).not.toContain("from '../../shared/prompt.ts'");
+		expect(verifySource).not.toContain("from '@shared/prompt.ts'");
 
 		// promptForVerifyCommands now lives in orchestrator/prompt.ts and imports from shared
 		const orchestratorPromptSource = await Bun.file(
 			join(import.meta.dir, '../orchestrator/prompt.ts')
 		).text();
 		expect(orchestratorPromptSource).not.toContain('function promptLine');
-		expect(orchestratorPromptSource).toContain("from '../../shared/prompt.ts'");
+		expect(orchestratorPromptSource).toContain("from '@shared/prompt.ts'");
 	});
 });

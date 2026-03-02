@@ -15,10 +15,10 @@ mock.module('../../shared/log.ts', () => ({
 	Spinner: class { start(_msg: string) {} stop() {} },
 }));
 
-import { fixVerificationFailure, defaultVerifyFixerDeps } from './verify-fixer.ts';
-import type { VerifyFixerDeps } from './verify-fixer.ts';
-import type { OrchestratorConfig } from './types.ts';
-import type { RunLogger } from '../../shared/logging.ts';
+import { fixVerificationFailure, defaultVerifyFixerDeps } from '@tools/orchestrator/verify-fixer.ts';
+import type { VerifyFixerDeps } from '@tools/orchestrator/verify-fixer.ts';
+import type { OrchestratorConfig } from '@tools/orchestrator/types.ts';
+import type { RunLogger } from '@shared/logging.ts';
 
 // ---------------------------------------------------------------------------
 // Shared fixtures
@@ -37,7 +37,7 @@ const baseConfig: OrchestratorConfig = {
 	],
 };
 
-const noopLogger: RunLogger = {
+const noopLogger = {
 	log: () => {},
 	path: '/dev/null',
 	runStart: () => {},
@@ -53,7 +53,7 @@ const noopLogger: RunLogger = {
 	worktreeRemoved: () => {},
 	branchCreated: () => {},
 	prCreated: () => {},
-};
+} as unknown as RunLogger;
 
 // ---------------------------------------------------------------------------
 // Mock deps builder
@@ -246,10 +246,10 @@ describe('fixVerificationFailure — spinner behavior', () => {
 describe('fixVerificationFailure — logger behavior', () => {
 	test('calls logger.agentOutput with issue number and agent output', async () => {
 		const agentOutputCalls: { issueNumber: number; output: string }[] = [];
-		const logger: RunLogger = {
+		const logger = {
 			...noopLogger,
-			agentOutput: (num, out) => { agentOutputCalls.push({ issueNumber: num, output: out }); },
-		};
+			agentOutput: (num: number, out: string) => { agentOutputCalls.push({ issueNumber: num, output: out }); },
+		} as unknown as RunLogger;
 
 		const { deps } = makeDeps({ runClaudeResult: { ok: true, output: 'fixed the tests' } });
 		await fixVerificationFailure({
@@ -268,10 +268,10 @@ describe('fixVerificationFailure — logger behavior', () => {
 
 	test('calls logger.agentOutput with empty output when runClaude throws', async () => {
 		const agentOutputCalls: { issueNumber: number; output: string }[] = [];
-		const logger: RunLogger = {
+		const logger = {
 			...noopLogger,
-			agentOutput: (num, out) => { agentOutputCalls.push({ issueNumber: num, output: out }); },
-		};
+			agentOutput: (num: number, out: string) => { agentOutputCalls.push({ issueNumber: num, output: out }); },
+		} as unknown as RunLogger;
 
 		const { deps } = makeDeps({ runClaudeThrows: true });
 		await fixVerificationFailure({

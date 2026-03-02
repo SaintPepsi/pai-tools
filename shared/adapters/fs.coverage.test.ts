@@ -1,7 +1,7 @@
 import { describe, test, expect } from 'bun:test';
 import { join } from 'node:path';
 import { $ } from 'bun';
-import { defaultFsAdapter } from './fs.ts';
+import { defaultFsAdapter } from '@shared/adapters/fs.ts';
 
 describe('defaultFsAdapter — real filesystem operations', () => {
 	test('readFile reads a file', async () => {

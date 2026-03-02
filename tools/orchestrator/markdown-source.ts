@@ -16,7 +16,7 @@
  * items are returned. This lets deps reference completed items without breaking.
  */
 
-import type { GitHubIssue } from '../../shared/github.ts';
+import type { GitHubIssue } from '@shared/github.ts';
 
 interface ParsedItem {
 	number: number;

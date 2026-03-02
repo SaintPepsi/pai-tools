@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { withRetries } from './retry.ts';
+import { withRetries } from '@tools/orchestrator/retry.ts';
 
 describe('withRetries', () => {
 	test('returns ok:true with value on first success', async () => {

@@ -5,24 +5,24 @@
  * Extracted from index.ts to keep the entry point focused on config and routing.
  */
 
-import { log } from '../../shared/log.ts';
-import { saveState } from '../../shared/state.ts';
-import { createWorktree, removeWorktree } from '../../shared/git.ts';
-import { fetchOpenIssues, createSubIssues, createPR } from '../../shared/github.ts';
-import { buildGraph, topologicalSort } from './dependency-graph.ts';
-import { runVerify } from '../verify/index.ts';
-import { assessIssueSize, implementIssue, fixVerificationFailure } from './agent-runner.ts';
-import { printExecutionPlan, printStatus } from './display.ts';
-import { getIssueState } from './state-helpers.ts';
-import { withRetries } from './retry.ts';
+import { log } from '@shared/log.ts';
+import { saveState } from '@shared/state.ts';
+import { createWorktree, removeWorktree } from '@shared/git.ts';
+import { fetchOpenIssues, createSubIssues, createPR } from '@shared/github.ts';
+import { buildGraph, topologicalSort } from '@tools/orchestrator/dependency-graph.ts';
+import { runVerify } from '@tools/verify/runner.ts';
+import { assessIssueSize, implementIssue, fixVerificationFailure } from '@tools/orchestrator/agent-runner.ts';
+import { printExecutionPlan, printStatus } from '@tools/orchestrator/display.ts';
+import { getIssueState } from '@tools/orchestrator/state-helpers.ts';
+import { withRetries } from '@tools/orchestrator/retry.ts';
+import type { GitHubIssue } from '@shared/github.ts';
 import type {
-	GitHubIssue,
 	DependencyNode,
 	OrchestratorState,
 	OrchestratorConfig,
 	OrchestratorFlags
-} from './types.ts';
-import type { RunLogger } from '../../shared/logging.ts';
+} from '@tools/orchestrator/types.ts';
+import type { RunLogger } from '@shared/logging.ts';
 
 // ---------------------------------------------------------------------------
 // Dependency injection interfaces (split by concern for ISP compliance)

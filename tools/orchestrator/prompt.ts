@@ -4,10 +4,10 @@
  * Prompts the user to configure verification commands when none are set.
  */
 
-import { log } from '../../shared/log.ts';
-import { promptLine } from '../../shared/prompt.ts';
-import type { PromptDeps } from '../../shared/prompt.ts';
-import type { VerifyCommand } from '../verify/types.ts';
+import { log } from '@shared/log.ts';
+import { promptLine } from '@shared/prompt.ts';
+import type { PromptDeps } from '@shared/prompt.ts';
+import type { VerifyCommand } from '@tools/verify/types.ts';
 
 export interface OrchestratorPromptDeps {
 	log: {

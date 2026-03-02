@@ -4,7 +4,7 @@
  * Extracted to break the circular dependency between index.ts and execution.ts.
  */
 
-import type { IssueState, OrchestratorState } from './types.ts';
+import type { IssueState, OrchestratorState } from '@tools/orchestrator/types.ts';
 
 export function initState(): OrchestratorState {
 	return {

@@ -7,45 +7,31 @@
  */
 
 import { join } from 'node:path';
-import { log } from '../../shared/log.ts';
-import { RunLogger } from '../../shared/logging.ts';
-import { findRepoRoot, loadToolConfig, saveToolConfig, getStateFilePath, migrateStateIfNeeded } from '../../shared/config.ts';
-import { loadState, clearState } from '../../shared/state.ts';
-import { fetchOpenIssues } from '../../shared/github.ts';
-import { parseMarkdownContent } from './markdown-source.ts';
-import { buildGraph, topologicalSort, computeTiers } from './dependency-graph.ts';
-import { printExecutionPlan, printStatus, printParallelPlan } from './display.ts';
-import { promptForVerifyCommands } from './prompt.ts';
-import { runDryRun } from './dry-run.ts';
-import { runMainLoop } from './execution.ts';
-import { runParallelLoop } from './parallel.ts';
-import { initState } from './state-helpers.ts';
-import { ORCHESTRATOR_DEFAULTS } from './defaults.ts';
+import { log } from '@shared/log.ts';
+import { RunLogger } from '@shared/logging.ts';
+import { findRepoRoot, loadToolConfig, saveToolConfig, getStateFilePath, migrateStateIfNeeded } from '@shared/config.ts';
+import { loadState, clearState } from '@shared/state.ts';
+import { fetchOpenIssues } from '@shared/github.ts';
+import { parseMarkdownContent } from '@tools/orchestrator/markdown-source.ts';
+import { buildGraph, topologicalSort, computeTiers } from '@tools/orchestrator/dependency-graph.ts';
+import { printExecutionPlan, printStatus, printParallelPlan } from '@tools/orchestrator/display.ts';
+import { promptForVerifyCommands } from '@tools/orchestrator/prompt.ts';
+import { runDryRun } from '@tools/orchestrator/dry-run.ts';
+import { runMainLoop } from '@tools/orchestrator/execution.ts';
+import { runParallelLoop } from '@tools/orchestrator/parallel.ts';
+import { initState } from '@tools/orchestrator/state-helpers.ts';
+import { ORCHESTRATOR_DEFAULTS } from '@tools/orchestrator/defaults.ts';
 import type {
 	OrchestratorConfig,
 	OrchestratorFlags
-} from './types.ts';
+} from '@tools/orchestrator/types.ts';
+import type { OrchestratorState, DependencyNode } from '@tools/orchestrator/types.ts';
+import type { VerifyCommand } from '@tools/verify/types.ts';
+import type { GitHubIssue } from '@shared/github.ts';
+import type { RunParallelLoopOptions } from '@tools/orchestrator/parallel.ts';
+import type { RunMainLoopOptions } from '@tools/orchestrator/execution.ts';
 
-// ---------------------------------------------------------------------------
-// Re-exports (backward compatibility)
-// ---------------------------------------------------------------------------
-
-export { loadState, saveState, clearState } from '../../shared/state.ts';
-export { localBranchExists, deleteLocalBranch, createWorktree, removeWorktree } from '../../shared/git.ts';
-export { parseDependencies, toKebabSlug, buildGraph, topologicalSort, computeTiers } from './dependency-graph.ts';
-export { parseMarkdownContent } from './markdown-source.ts';
-export { assessIssueSize, buildImplementationPrompt, fixVerificationFailure, implementIssue } from './agent-runner.ts';
-export { printExecutionPlan, printStatus, printParallelPlan } from './display.ts';
-export { runParallelLoop } from './parallel.ts';
-export { buildPRBody, runMainLoop } from './execution.ts';
-export { runDryRun } from './dry-run.ts';
-export { initState, getIssueState } from './state-helpers.ts';
-
-// ---------------------------------------------------------------------------
-// Flag parsing (re-export for backward compatibility)
-// ---------------------------------------------------------------------------
-
-export { parseFlags } from './flags.ts';
+export { parseFlags } from '@tools/orchestrator/flags.ts';
 
 // ---------------------------------------------------------------------------
 // Dependency injection
@@ -59,30 +45,25 @@ export interface OrchestrateDeps {
 	clearState: (repoRoot: string, toolName: string) => void;
 	loadState: (file: string) => OrchestratorState | null;
 	saveToolConfig: (repoRoot: string, toolName: string, partial: Partial<OrchestratorConfig>) => void;
-	promptForVerifyCommands: () => Promise<import('../verify/types.ts').VerifyCommand[]>;
-	fetchOpenIssues: (allowedAuthors?: string[]) => Promise<import('../../shared/github.ts').GitHubIssue[]>;
+	promptForVerifyCommands: () => Promise<VerifyCommand[]>;
+	fetchOpenIssues: (allowedAuthors?: string[]) => Promise<GitHubIssue[]>;
 	readFile: (path: string) => Promise<string>;
-	parseMarkdownContent: (content: string) => import('../../shared/github.ts').GitHubIssue[];
-	buildGraph: (issues: import('../../shared/github.ts').GitHubIssue[], config: OrchestratorConfig) => Map<number, import('./types.ts').DependencyNode>;
-	topologicalSort: (graph: Map<number, import('./types.ts').DependencyNode>) => number[];
-	computeTiers: (graph: Map<number, import('./types.ts').DependencyNode>) => number[][];
-	printParallelPlan: (tiers: number[][], graph: Map<number, import('./types.ts').DependencyNode>, parallelN: number) => void;
-	printExecutionPlan: (order: number[], graph: Map<number, import('./types.ts').DependencyNode>, baseBranch: string) => void;
+	parseMarkdownContent: (content: string) => GitHubIssue[];
+	buildGraph: (issues: GitHubIssue[], config: OrchestratorConfig) => Map<number, DependencyNode>;
+	topologicalSort: (graph: Map<number, DependencyNode>) => number[];
+	computeTiers: (graph: Map<number, DependencyNode>) => number[][];
+	printParallelPlan: (tiers: number[][], graph: Map<number, DependencyNode>, parallelN: number) => void;
+	printExecutionPlan: (order: number[], graph: Map<number, DependencyNode>, baseBranch: string) => void;
 	printStatus: (state: OrchestratorState) => void;
 	makeLogger: (repoRoot: string) => RunLogger;
-	runDryRun: (executionOrder: number[], graph: Map<number, import('./types.ts').DependencyNode>, state: OrchestratorState, config: OrchestratorConfig, flags: OrchestratorFlags, repoRoot: string) => Promise<void>;
-	runParallelLoop: (opts: import('./parallel.ts').RunParallelLoopOptions) => Promise<void>;
-	runMainLoop: (opts: import('./execution.ts').RunMainLoopOptions) => Promise<void>;
+	runDryRun: (executionOrder: number[], graph: Map<number, DependencyNode>, state: OrchestratorState, config: OrchestratorConfig, flags: OrchestratorFlags, repoRoot: string) => Promise<void>;
+	runParallelLoop: (opts: RunParallelLoopOptions) => Promise<void>;
+	runMainLoop: (opts: RunMainLoopOptions) => Promise<void>;
 	initState: () => OrchestratorState;
-	log: typeof import('../../shared/log.ts').log;
+	log: typeof log;
 	exit: (code: number) => never;
 	consolelog: (...args: unknown[]) => void;
 }
-
-import type { OrchestratorState } from './types.ts';
-import { getStateFilePath } from '../../shared/config.ts';
-import { saveToolConfig } from '../../shared/config.ts';
-
 export const defaultOrchestrateDeps: OrchestrateDeps = {
 	findRepoRoot,
 	loadToolConfig: (r, t, d) => loadToolConfig<OrchestratorConfig>(r, t, d),

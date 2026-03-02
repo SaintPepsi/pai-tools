@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, spyOn } from 'bun:test';
-import { makeLog, Spinner, defaultLogDeps, type LogDeps } from './log.ts';
+import { makeLog, Spinner, defaultLogDeps, type LogDeps } from '@shared/log.ts';
 
 function makeDeps(): LogDeps & { logs: unknown[][]; errors: unknown[][]; written: string[] } {
 	const logs: unknown[][] = [];

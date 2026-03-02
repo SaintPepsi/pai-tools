@@ -1,4 +1,4 @@
-import type { OrchestratorFlags } from './types.ts';
+import type { OrchestratorFlags } from '@tools/orchestrator/types.ts';
 
 // ---------------------------------------------------------------------------
 // Flag parsing

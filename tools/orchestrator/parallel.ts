@@ -6,24 +6,24 @@
  * failed issues are marked `blocked`.
  */
 
-import { log } from '../../shared/log.ts';
-import { RunLogger } from '../../shared/logging.ts';
-import { saveState } from '../../shared/state.ts';
-import { createWorktree, removeWorktree } from '../../shared/git.ts';
-import { createPR } from '../../shared/github.ts';
-import { runVerify } from '../verify/runner.ts';
-import { implementIssue } from './agent-runner.ts';
-import { fixVerificationFailure } from './verify-fixer.ts';
-import { buildPRBody } from './execution.ts';
-import { getIssueState } from './state-helpers.ts';
-import { withRetries } from './retry.ts';
-import { printStatus } from './display.ts';
+import { log } from '@shared/log.ts';
+import { RunLogger } from '@shared/logging.ts';
+import { saveState } from '@shared/state.ts';
+import { createWorktree, removeWorktree } from '@shared/git.ts';
+import { createPR } from '@shared/github.ts';
+import { runVerify } from '@tools/verify/runner.ts';
+import { implementIssue } from '@tools/orchestrator/agent-runner.ts';
+import { fixVerificationFailure } from '@tools/orchestrator/verify-fixer.ts';
+import { buildPRBody } from '@tools/orchestrator/execution.ts';
+import { getIssueState } from '@tools/orchestrator/state-helpers.ts';
+import { withRetries } from '@tools/orchestrator/retry.ts';
+import { printStatus } from '@tools/orchestrator/display.ts';
 import type {
 	DependencyNode,
 	OrchestratorConfig,
 	OrchestratorFlags,
 	OrchestratorState
-} from './types.ts';
+} from '@tools/orchestrator/types.ts';
 
 // ---------------------------------------------------------------------------
 // Mutex — serializes state file writes to prevent race conditions

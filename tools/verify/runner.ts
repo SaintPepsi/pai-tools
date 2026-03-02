@@ -8,8 +8,20 @@
  */
 
 import { $ } from 'bun';
-import { log } from '../../shared/log.ts';
-import type { VerifyOptions, VerifyResult, VerifyStepResult } from './types.ts';
+import { log } from '@shared/log.ts';
+import type { VerifyOptions, VerifyResult, VerifyStepResult } from '@tools/verify/types.ts';
+
+// ---------------------------------------------------------------------------
+// Dependency injection
+// ---------------------------------------------------------------------------
+
+export interface RunVerifyDeps {
+	log: typeof log;
+}
+
+export const defaultRunVerifyDeps: RunVerifyDeps = {
+	log,
+};
 
 // ---------------------------------------------------------------------------
 // Internal Result type — avoids try-catch flow control
@@ -29,7 +41,7 @@ async function runCmd(cmd: string, cwd: string): Promise<RunResult> {
 	return { ok: false, durationMs, errorMsg };
 }
 
-export async function runVerify(opts: VerifyOptions): Promise<VerifyResult> {
+export async function runVerify(opts: VerifyOptions, deps: RunVerifyDeps = defaultRunVerifyDeps): Promise<VerifyResult> {
 	const steps: VerifyStepResult[] = [];
 	const issueNum = opts.issueNumber ?? 0;
 
@@ -39,10 +51,10 @@ export async function runVerify(opts: VerifyOptions): Promise<VerifyResult> {
 		: opts.verify;
 
 	for (const step of verifySteps) {
-		log.info(`Running ${step.name}: ${step.cmd}`);
+		deps.log.info(`Running ${step.name}: ${step.cmd}`);
 		const res = await runCmd(step.cmd, opts.cwd);
 		if (res.ok) {
-			log.ok(`${step.name} passed`);
+			deps.log.ok(`${step.name} passed`);
 			steps.push({ name: step.name, ok: true, durationMs: res.durationMs });
 			opts.logger?.verifyPass(issueNum, step.name);
 		} else {
@@ -54,19 +66,19 @@ export async function runVerify(opts: VerifyOptions): Promise<VerifyResult> {
 
 	// E2E (only if configured and not skipped)
 	if (opts.e2e && !opts.skipE2e) {
-		log.info(`Running E2E: ${opts.e2e.run}`);
+		deps.log.info(`Running E2E: ${opts.e2e.run}`);
 		const e2eRes = await runCmd(opts.e2e.run, opts.cwd);
 		if (e2eRes.ok) {
-			log.ok('E2E passed');
+			deps.log.ok('E2E passed');
 			steps.push({ name: 'e2e', ok: true, durationMs: e2eRes.durationMs });
 			opts.logger?.verifyPass(issueNum, 'e2e');
 		} else {
 			// First run failed — attempt snapshot update then re-run
-			log.warn('E2E failed — attempting snapshot update...');
+			deps.log.warn('E2E failed — attempting snapshot update...');
 			await runCmd(opts.e2e.update, opts.cwd);
 			const retryRes = await runCmd(opts.e2e.run, opts.cwd);
 			if (retryRes.ok) {
-				log.ok('E2E passed after snapshot update');
+				deps.log.ok('E2E passed after snapshot update');
 				steps.push({ name: 'e2e (after snapshot update)', ok: true, durationMs: retryRes.durationMs });
 				opts.logger?.verifyPass(issueNum, 'e2e (after snapshot update)');
 				// Stage updated snapshots

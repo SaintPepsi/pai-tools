@@ -7,8 +7,9 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { buildImplementationPrompt } from './agent-runner.ts';
-import type { OrchestratorConfig, GitHubIssue } from './types.ts';
+import { buildImplementationPrompt } from '@tools/orchestrator/agent-runner.ts';
+import type { OrchestratorConfig } from '@tools/orchestrator/types.ts';
+import type { GitHubIssue } from '@shared/github.ts';
 
 // ---------------------------------------------------------------------------
 // Helpers

@@ -1,7 +1,7 @@
 import { describe, test, expect } from 'bun:test';
 import { join } from 'node:path';
 import { $ } from 'bun';
-import { RunLogger } from './logging.ts';
+import { RunLogger } from '@shared/logging.ts';
 
 describe('RunLogger — prCreated', () => {
 	test('logs pr_created event with issueNumber and prNumber', async () => {

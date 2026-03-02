@@ -5,7 +5,7 @@ import {
 	deleteLocalBranch,
 	detectConflicts,
 	rebaseBranch
-} from './git.ts';
+} from '@shared/git.ts';
 
 describe('shared/git — branch operations', () => {
 	let repoRoot: string;

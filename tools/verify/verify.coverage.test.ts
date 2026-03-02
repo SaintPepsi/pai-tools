@@ -1,8 +1,8 @@
 import { describe, test, expect } from 'bun:test';
 import { $ } from 'bun';
-import { verify, defaultVerifyDeps, type VerifyDeps } from './index.ts';
-import { runVerify } from './runner.ts';
-import type { VerifyFlags, VerifyOptions, VerifyResult } from './types.ts';
+import { verify, defaultVerifyDeps, type VerifyDeps } from '@tools/verify/index.ts';
+import { runVerify } from '@tools/verify/runner.ts';
+import type { VerifyFlags, VerifyOptions, VerifyResult } from '@tools/verify/types.ts';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -12,11 +12,21 @@ function makeFlags(overrides: Partial<VerifyFlags> = {}): VerifyFlags {
 	return { skipE2e: false, filterName: null, json: false, help: false, ...overrides };
 }
 
-function makeDeps(overrides: Partial<VerifyDeps> = {}): { deps: VerifyDeps; logged: string[]; exited: number[] } {
+function mockLog() {
 	const logged: string[] = [];
+	const push = (...args: unknown[]) => logged.push(args.map(String).join(' '));
+	return {
+		logged,
+		mock: { step: push, info: push, ok: push, warn: push, error: push, dim: push } as VerifyDeps['log'],
+	};
+}
+
+function makeDeps(overrides: Partial<VerifyDeps> = {}): { deps: VerifyDeps; logged: string[]; exited: number[] } {
+	const { logged, mock: logMock } = mockLog();
 	const exited: number[] = [];
 	const deps: VerifyDeps = {
-		log: (...args: unknown[]) => logged.push(args.map(String).join(' ')),
+		log: logMock,
+		consolelog: (...args: unknown[]) => logged.push(args.map(String).join(' ')),
 		exit: (code: number) => { exited.push(code); throw new Error(`process.exit(${code})`); },
 		findRepoRoot: () => '/fake/repo',
 		loadToolConfig: <T>(_root: string, _tool: string, defaults: T) => defaults,
@@ -148,8 +158,9 @@ describe('verify() — failure path', () => {
 // ---------------------------------------------------------------------------
 
 describe('defaultVerifyDeps', () => {
-	test('exposes expected functions', () => {
-		expect(typeof defaultVerifyDeps.log).toBe('function');
+	test('exposes expected properties', () => {
+		expect(typeof defaultVerifyDeps.log).toBe('object');
+		expect(typeof defaultVerifyDeps.consolelog).toBe('function');
 		expect(typeof defaultVerifyDeps.exit).toBe('function');
 		expect(typeof defaultVerifyDeps.findRepoRoot).toBe('function');
 		expect(typeof defaultVerifyDeps.loadToolConfig).toBe('function');

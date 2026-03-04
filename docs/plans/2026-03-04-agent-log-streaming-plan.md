@@ -596,7 +596,136 @@ git commit -m "refactor: replace spinner with rolling window in verify-fixer"
 
 ---
 
-### Task 5: Clean up and full test suite
+### Task 5: Wire rolling window into `shared/git.ts` conflict resolution
+
+**Files:**
+- Modify: `shared/git.ts`
+- Test: `shared/git.test.ts`
+
+**Step 1: Write the failing test**
+
+Add to `shared/git.test.ts` (in the `resolveConflicts` and `autoResolveConflicts` describe blocks):
+
+```typescript
+test('passes onChunk to deps.claude for custom intent resolution', async () => {
+	const capturedOpts: RunClaudeOpts[] = [];
+	const deps = makeDeps({
+		claude: async (opts: RunClaudeOpts) => {
+			capturedOpts.push(opts);
+			return { ok: true, output: 'resolved content' };
+		},
+	});
+
+	// ... set up conflict with custom intent (not 'ours'/'theirs')
+	await resolveConflicts(conflicts, intents, '/repo', deps);
+
+	expect(capturedOpts[0].onChunk).toBeDefined();
+});
+
+test('passes onChunk to deps.claude for auto-resolve', async () => {
+	const capturedOpts: RunClaudeOpts[] = [];
+	const deps = makeDeps({
+		claude: async (opts: RunClaudeOpts) => {
+			capturedOpts.push(opts);
+			return { ok: true, output: 'resolved content' };
+		},
+	});
+
+	await autoResolveConflicts(conflicts, '/repo', deps);
+
+	expect(capturedOpts[0].onChunk).toBeDefined();
+});
+```
+
+**Step 2: Run tests to verify they fail**
+
+Run: `bun test shared/git.test.ts`
+Expected: FAIL — `onChunk` not passed in current code
+
+**Step 3: Add `onChunk` and `makeWindow` to git.ts Claude calls**
+
+Add `RollingWindow` import:
+
+```typescript
+import { log, RollingWindow } from '@shared/log.ts';
+```
+
+Add `makeWindow` to `GitDeps`:
+
+```typescript
+export interface GitDeps {
+	exec: ...;
+	fs: FsAdapter;
+	env: Record<string, string | undefined>;
+	claude: (opts: RunClaudeOpts) => Promise<{ ok: boolean; output: string }>;
+	prompt: (question: string) => Promise<string>;
+	makeWindow: (header: string, logPath: string) => { update: (text: string) => void; clear: () => void };
+}
+```
+
+Update `defaultDeps`:
+
+```typescript
+const defaultDeps: GitDeps = {
+	exec: defaultExec,
+	fs: defaultFsAdapter,
+	env: process.env as Record<string, string | undefined>,
+	claude: runClaude,
+	prompt: promptLine,
+	makeWindow: (header: string, logPath: string) =>
+		new RollingWindow({ header, logPath }),
+};
+```
+
+In `resolveConflicts` (the custom intent branch around line 281):
+
+```typescript
+// OLD:
+const result = await deps.claude({ prompt, model: 'sonnet', cwd: repoRoot });
+
+// NEW:
+const window = deps.makeWindow(`Resolving conflict: ${c.file}`, '');
+const result = await deps.claude({
+	prompt, model: 'sonnet', cwd: repoRoot,
+	onChunk: (chunk) => window.update(chunk),
+});
+window.clear();
+```
+
+In `autoResolveConflicts` (around line 365):
+
+```typescript
+// OLD:
+const result = await deps.claude({ prompt, model: 'sonnet', cwd: repoRoot });
+
+// NEW:
+const window = deps.makeWindow(`Auto-resolving: ${c.file}`, '');
+const result = await deps.claude({
+	prompt, model: 'sonnet', cwd: repoRoot,
+	onChunk: (chunk) => window.update(chunk),
+});
+window.clear();
+```
+
+**Step 4: Update git.test.ts mock deps to include `makeWindow`**
+
+Add `makeWindow: () => ({ update: () => {}, clear: () => {} })` to all mock `GitDeps` objects.
+
+**Step 5: Run tests to verify they pass**
+
+Run: `bun test shared/git.test.ts`
+Expected: All tests PASS
+
+**Step 6: Commit**
+
+```bash
+git add shared/git.ts shared/git.test.ts
+git commit -m "feat: add rolling window to git conflict resolution Claude calls"
+```
+
+---
+
+### Task 6: Clean up and full test suite
 
 **Step 1: Search for stale references**
 

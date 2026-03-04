@@ -63,7 +63,7 @@ Call sites replace spinner with: (1) print the log file path, (2) pass an `onChu
 | `implementIssue` | `tools/orchestrator/agent-runner.ts` | Replace spinner + logDim with rolling window |
 | `fixVerificationFailure` | `tools/orchestrator/verify-fixer.ts` | Replace spinner with rolling window |
 
-`git.ts` — no changes. Its Claude calls are short (conflict resolution) and don't use a spinner. The streaming via `onChunk` is opt-in so `git.ts` is unaffected.
+`resolveConflicts` and `autoResolveConflicts` in `shared/git.ts` — pass `onChunk` to show a rolling window during conflict resolution. These calls go through `deps.claude()` which already accepts `RunClaudeOpts`.
 
 ### What stays the same
 
@@ -85,4 +85,5 @@ Call sites replace spinner with: (1) print the log file path, (2) pass an `onChu
 2. `shared/log.ts` — new `RollingWindow` class
 3. `tools/orchestrator/agent-runner.ts` — replace spinner with rolling window
 4. `tools/orchestrator/verify-fixer.ts` — replace spinner with rolling window
-5. Tests for all above
+5. `shared/git.ts` — pass `onChunk` to `deps.claude()` in `resolveConflicts` and `autoResolveConflicts`
+6. Tests for all above

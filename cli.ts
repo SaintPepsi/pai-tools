@@ -21,6 +21,7 @@ import { orchestrate, parseFlags } from '@tools/orchestrator/index.ts';
 import { verify, parseVerifyFlags } from '@tools/verify/index.ts';
 import { finalize, parseFinalizeFlags } from '@tools/finalize/index.ts';
 import { setup } from '@tools/setup.ts';
+import { writeExample } from '@tools/orchestrator/example.ts';
 import { $ } from 'bun';
 import { join } from 'node:path';
 
@@ -54,6 +55,7 @@ const HELP = `\x1b[36mpait\x1b[0m — PAI Tools CLI
   --no-verify      Skip verification requirement
   --parallel <N>   Run N issues concurrently (default: 1 = sequential)
   --file <path>    Read tasks from a markdown checklist instead of GitHub
+  example          Write an example plan file (use --file <path> to set name)
 
 \x1b[1mVERIFY FLAGS\x1b[0m
   --skip-e2e       Skip E2E verification step
@@ -75,7 +77,16 @@ type CommandHandler = () => Promise<void>;
 
 const commands = new Map<string, CommandHandler>([
 	['orchestrate', async () => {
-		const flags = parseFlags(process.argv.slice(3));
+		const args = process.argv.slice(3);
+		if (args[0] === 'example') {
+			const rest = args.slice(1);
+			const fileIdx = rest.indexOf('--file');
+			const output = (fileIdx !== -1 && rest[fileIdx + 1]) ? rest[fileIdx + 1] : 'PLAN.md';
+			const force = rest.includes('--force');
+			await writeExample(output, force);
+			return;
+		}
+		const flags = parseFlags(args);
 		await orchestrate(flags);
 	}],
 	['verify', async () => {

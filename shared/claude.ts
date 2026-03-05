@@ -8,6 +8,7 @@ export interface RunClaudeOpts {
 	cwd: string;
 	permissionMode?: string;
 	allowedTools?: string;
+	onChunk?: (chunk: string) => void;
 }
 
 export interface ClaudeProcess {
@@ -53,7 +54,15 @@ export async function runClaude(
 		env,
 	});
 
-	const output = await new Response(proc.stdout).text();
+	const decoder = new TextDecoder();
+	let output = '';
+
+	for await (const chunk of proc.stdout) {
+		const text = decoder.decode(chunk);
+		output += text;
+		opts.onChunk?.(text);
+	}
+
 	const exitCode = await proc.exited;
 
 	return { ok: exitCode === 0, output };

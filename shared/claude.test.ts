@@ -16,6 +16,22 @@ function makeProc(output: string, exitCode: number): ClaudeProcess {
 	};
 }
 
+function makeChunkedProc(chunks: string[], exitCode: number): ClaudeProcess {
+	const encoder = new TextEncoder();
+	const stream = new ReadableStream<Uint8Array>({
+		start(controller) {
+			for (const chunk of chunks) {
+				controller.enqueue(encoder.encode(chunk));
+			}
+			controller.close();
+		},
+	});
+	return {
+		stdout: stream,
+		exited: Promise.resolve(exitCode),
+	};
+}
+
 function makeDeps(output: string, exitCode: number): ClaudeDeps & {
 	calls: Array<{ cmd: string[]; opts: Parameters<ClaudeDeps['spawn']>[1] }>;
 } {
@@ -24,6 +40,20 @@ function makeDeps(output: string, exitCode: number): ClaudeDeps & {
 		spawn: (cmd, opts) => {
 			calls.push({ cmd, opts });
 			return makeProc(output, exitCode);
+		},
+		env: { HOME: '/home/test', PATH: '/usr/bin' },
+		calls,
+	};
+}
+
+function makeChunkedDeps(chunks: string[], exitCode: number): ClaudeDeps & {
+	calls: Array<{ cmd: string[]; opts: Parameters<ClaudeDeps['spawn']>[1] }>;
+} {
+	const calls: Array<{ cmd: string[]; opts: Parameters<ClaudeDeps['spawn']>[1] }> = [];
+	return {
+		spawn: (cmd, opts) => {
+			calls.push({ cmd, opts });
+			return makeChunkedProc(chunks, exitCode);
 		},
 		env: { HOME: '/home/test', PATH: '/usr/bin' },
 		calls,
@@ -116,6 +146,45 @@ describe('runClaude', () => {
 		const blob = deps.calls[0].opts.stdin;
 		const text = await blob.text();
 		expect(text).toBe('my prompt content');
+	});
+
+	test('calls onChunk for each streamed chunk', async () => {
+		const received: string[] = [];
+		const deps = makeChunkedDeps(['foo', 'bar', 'baz'], 0);
+		await runClaude(
+			{ prompt: 'test', model: 'haiku', cwd: '/tmp', onChunk: (c) => received.push(c) },
+			deps,
+		);
+		expect(received).toEqual(['foo', 'bar', 'baz']);
+	});
+
+	test('onChunk chunks concatenate to full output', async () => {
+		const received: string[] = [];
+		const deps = makeChunkedDeps(['line1\n', 'line2\n', 'line3\n'], 0);
+		const result = await runClaude(
+			{ prompt: 'test', model: 'haiku', cwd: '/tmp', onChunk: (c) => received.push(c) },
+			deps,
+		);
+		expect(received.join('')).toBe(result.output);
+	});
+
+	test('works without onChunk provided', async () => {
+		const deps = makeDeps('output', 0);
+		const result = await runClaude(
+			{ prompt: 'test', model: 'haiku', cwd: '/tmp' },
+			deps,
+		);
+		expect(result.output).toBe('output');
+	});
+
+	test('returns empty output for empty stream', async () => {
+		const deps = makeChunkedDeps([], 0);
+		const result = await runClaude(
+			{ prompt: 'test', model: 'haiku', cwd: '/tmp' },
+			deps,
+		);
+		expect(result.output).toBe('');
+		expect(result.ok).toBe(true);
 	});
 });
 

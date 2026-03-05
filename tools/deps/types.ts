@@ -48,17 +48,23 @@ export interface RelationshipService {
 // ─── CLI Types ───────────────────────────────────────────────────────────────
 
 /** Valid subcommands for the deps tool. */
-export type DepsSubcommand = 'show' | 'add' | 'remove' | 'list';
+export type DepsSubcommand = 'add' | 'remove' | 'list' | 'tree' | 'validate' | 'sync';
 
 /** Parsed CLI flags for the deps tool. */
 export interface DepsFlags {
 	subcommand: DepsSubcommand | null;
-	/** Target issue number. */
+	/** Target issue number (--issue <N>). */
 	issue: number | null;
-	/** Related issue number (for add/remove). */
-	related: number | null;
-	/** Relationship type to operate on. */
-	type: 'blocked-by' | 'blocking' | 'parent' | 'sub-issue' | null;
+	/** Issue number this issue blocks (--blocks <N>). */
+	blocks: number | null;
+	/** Issue number this issue is blocked by (--blocked-by <N>). */
+	blockedBy: number | null;
+	/** Parent issue number (--parent <N>). */
+	parent: number | null;
+	/** Child/sub-issue number (--child <N>). */
+	child: number | null;
+	/** Apply pending changes without prompting. */
+	apply: boolean;
 	/** Output as JSON instead of terminal format. */
 	json: boolean;
 	help: boolean;

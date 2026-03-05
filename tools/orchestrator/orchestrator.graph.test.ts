@@ -1,6 +1,7 @@
 import { describe, test, expect } from 'bun:test';
-import { buildGraph, topologicalSort, computeTiers } from './dependency-graph.ts';
-import type { GitHubIssue, OrchestratorConfig } from './types.ts';
+import { buildGraph, topologicalSort, computeTiers } from '@tools/orchestrator/dependency-graph.ts';
+import type { GitHubIssue } from '@shared/github.ts';
+import type { OrchestratorConfig } from '@tools/orchestrator/types.ts';
 
 const testConfig: OrchestratorConfig = {
 	branchPrefix: 'feat/',

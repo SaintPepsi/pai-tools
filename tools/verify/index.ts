@@ -5,20 +5,16 @@
  * Interactive config prompt: `tools/orchestrator/prompt.ts`
  */
 
-import { log } from '../../shared/log.ts';
-import { findRepoRoot, loadToolConfig } from '../../shared/config.ts';
-import { runVerify } from './runner.ts';
+import { log } from '@shared/log.ts';
+import { findRepoRoot, loadToolConfig } from '@shared/config.ts';
+import { runVerify } from '@tools/verify/runner.ts';
 import type {
 	VerifyCommand,
 	VerifyFlags,
 	VerifyOptions,
 	VerifyResult,
 	VerifyStepResult
-} from './types.ts';
-
-// Re-export types and runner for convenience
-export type { VerifyCommand, VerifyFlags, VerifyOptions, VerifyResult, VerifyStepResult } from './types.ts';
-export { runVerify } from './runner.ts';
+} from '@tools/verify/types.ts';
 
 // ---------------------------------------------------------------------------
 // Flag parsing
@@ -63,24 +59,46 @@ interface OrchestratorConfigPartial {
 	};
 }
 
-export async function verify(flags: VerifyFlags): Promise<void> {
+// ---------------------------------------------------------------------------
+// Dependency injection
+// ---------------------------------------------------------------------------
+
+export interface VerifyDeps {
+	log: typeof log;
+	consolelog: (...args: unknown[]) => void;
+	exit: (code: number) => never;
+	findRepoRoot: () => string;
+	loadToolConfig: <T>(repoRoot: string, toolName: string, defaults: T) => T;
+	runVerify: (opts: VerifyOptions) => Promise<VerifyResult>;
+}
+
+export const defaultVerifyDeps: VerifyDeps = {
+	log,
+	consolelog: console.log,
+	exit: process.exit as (code: number) => never,
+	findRepoRoot,
+	loadToolConfig,
+	runVerify,
+};
+
+export async function verify(flags: VerifyFlags, deps: VerifyDeps = defaultVerifyDeps): Promise<void> {
 	if (flags.help) {
-		console.log(VERIFY_HELP);
+		deps.consolelog(VERIFY_HELP);
 		return;
 	}
 
-	const repoRoot = findRepoRoot();
-	const config = loadToolConfig<OrchestratorConfigPartial>(repoRoot, 'orchestrator', {
+	const repoRoot = deps.findRepoRoot();
+	const config = deps.loadToolConfig<OrchestratorConfigPartial>(repoRoot, 'orchestrator', {
 		verify: [],
 	});
 
 	if (config.verify.length === 0 && !config.e2e) {
-		log.error('No verification commands configured in .pait/orchestrator.json');
-		log.info('Run `pait orchestrate` first to configure verification steps.');
-		process.exit(1);
+		deps.log.error('No verification commands configured in .pait/orchestrator.json');
+		deps.log.info('Run `pait orchestrate` first to configure verification steps.');
+		deps.exit(1);
 	}
 
-	const result = await runVerify({
+	const result = await deps.runVerify({
 		verify: config.verify,
 		e2e: config.e2e,
 		cwd: repoRoot,
@@ -89,21 +107,21 @@ export async function verify(flags: VerifyFlags): Promise<void> {
 	});
 
 	if (flags.json) {
-		console.log(JSON.stringify(result, null, 2));
+		deps.consolelog(JSON.stringify(result, null, 2));
 		return;
 	}
 
 	if (result.ok) {
-		log.ok(`All ${result.steps.length} verification step(s) passed`);
+		deps.log.ok(`All ${result.steps.length} verification step(s) passed`);
 		for (const step of result.steps) {
-			log.dim(`  ${step.name} (${step.durationMs}ms)`);
+			deps.log.dim(`  ${step.name} (${step.durationMs}ms)`);
 		}
 	} else {
-		log.error(`Verification failed at ${result.failedStep}`);
+		deps.log.error(`Verification failed at ${result.failedStep}`);
 		for (const step of result.steps) {
 			const icon = step.ok ? '\x1b[32m✓\x1b[0m' : '\x1b[31m✗\x1b[0m';
-			console.log(`  ${icon} ${step.name} (${step.durationMs}ms)`);
+			deps.consolelog(`  ${icon} ${step.name} (${step.durationMs}ms)`);
 		}
-		process.exit(1);
+		deps.exit(1);
 	}
 }

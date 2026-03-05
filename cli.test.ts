@@ -1,24 +1,17 @@
 import { describe, test, expect } from 'bun:test';
-import { readFileSync, existsSync } from 'node:fs';
+import { defaultFsAdapter } from '@shared/adapters/fs.ts';
 import { join } from 'node:path';
 
 describe('CLI help text sync', () => {
-	const cliSource = readFileSync(join(import.meta.dir, 'cli.ts'), 'utf-8');
-	const orchestratorSource = readFileSync(
-		join(import.meta.dir, 'tools/orchestrator/flags.ts'),
-		'utf-8'
+	const cliSource = defaultFsAdapter.readFile(join(import.meta.dir, 'cli.ts'));
+	const orchestratorSource = defaultFsAdapter.readFile(
+		join(import.meta.dir, 'tools/orchestrator/flags.ts')
 	);
-	const analyzeSource = readFileSync(
-		join(import.meta.dir, 'tools/analyze/flags.ts'),
-		'utf-8'
+	const verifySource = defaultFsAdapter.readFile(
+		join(import.meta.dir, 'tools/verify/index.ts')
 	);
-	const verifySource = readFileSync(
-		join(import.meta.dir, 'tools/verify/index.ts'),
-		'utf-8'
-	);
-	const finalizeSource = readFileSync(
-		join(import.meta.dir, 'tools/finalize/index.ts'),
-		'utf-8'
+	const finalizeSource = defaultFsAdapter.readFile(
+		join(import.meta.dir, 'tools/finalize/index.ts')
 	);
 
 	test('every orchestrator flag in parseFlags appears in CLI HELP', () => {
@@ -42,33 +35,6 @@ describe('CLI help text sync', () => {
 		if (missing.length > 0) {
 			throw new Error(
 				`Orchestrator flags missing from CLI help text: ${missing.join(', ')}\n` +
-					'Update the HELP string in cli.ts to include these flags.'
-			);
-		}
-	});
-
-	test('every analyze flag in parseAnalyzeFlags appears in CLI HELP', () => {
-		const parseFlagsMatch = analyzeSource.match(
-			/function parseAnalyzeFlags[\s\S]*?^}/m
-		);
-		expect(parseFlagsMatch).not.toBeNull();
-
-		const flagMatches = parseFlagsMatch![0].matchAll(/'(--[\w-]+)'/g);
-		const flags = [...flagMatches].map((m) => m[1]);
-
-		expect(flags.length).toBeGreaterThan(0);
-
-		const helpMatch = cliSource.match(/const HELP = `[\s\S]*?`;/);
-		expect(helpMatch).not.toBeNull();
-		const helpText = helpMatch![0];
-
-		// --help is a meta-flag handled globally, not listed per-command
-		const missing = flags
-			.filter((flag) => flag !== '--help')
-			.filter((flag) => !helpText.includes(flag));
-		if (missing.length > 0) {
-			throw new Error(
-				`Analyze flags missing from CLI help text: ${missing.join(', ')}\n` +
 					'Update the HELP string in cli.ts to include these flags.'
 			);
 		}
@@ -138,19 +104,18 @@ describe('Tool README flag sync', () => {
 
 	const tools = [
 		{ name: 'orchestrator', fn: 'parseFlags', dir: 'tools/orchestrator', file: 'flags.ts' },
-		{ name: 'analyze', fn: 'parseAnalyzeFlags', dir: 'tools/analyze', file: 'flags.ts' },
 		{ name: 'verify', fn: 'parseVerifyFlags', dir: 'tools/verify', file: 'index.ts' },
 		{ name: 'finalize', fn: 'parseFinalizeFlags', dir: 'tools/finalize', file: 'index.ts' }
 	];
 
 	for (const tool of tools) {
 		const readmePath = join(import.meta.dir, tool.dir, 'README.md');
-		if (!existsSync(readmePath)) continue;
+		if (!defaultFsAdapter.fileExists(readmePath)) continue;
 
 		test(`every ${tool.name} flag appears in ${tool.dir}/README.md`, () => {
-			const toolSource = readFileSync(join(import.meta.dir, tool.dir, tool.file), 'utf-8');
+			const toolSource = defaultFsAdapter.readFile(join(import.meta.dir, tool.dir, tool.file));
 			const flags = extractFlags(toolSource, tool.fn);
-			const toolReadme = readFileSync(readmePath, 'utf-8');
+			const toolReadme = defaultFsAdapter.readFile(readmePath);
 
 			expect(flags.length).toBeGreaterThan(0);
 

@@ -8,11 +8,40 @@
  */
 
 import { $ } from 'bun';
-import { log } from '../../shared/log.ts';
-import type { VerifyOptions, VerifyResult, VerifyStepResult } from './types.ts';
+import { log } from '@shared/log.ts';
+import type { VerifyOptions, VerifyResult, VerifyStepResult } from '@tools/verify/types.ts';
 
+// ---------------------------------------------------------------------------
+// Dependency injection
+// ---------------------------------------------------------------------------
 
-export async function runVerify(opts: VerifyOptions): Promise<VerifyResult> {
+export interface RunVerifyDeps {
+	log: typeof log;
+}
+
+export const defaultRunVerifyDeps: RunVerifyDeps = {
+	log,
+};
+
+// ---------------------------------------------------------------------------
+// Internal Result type — avoids try-catch flow control
+// ---------------------------------------------------------------------------
+
+type RunResult = { ok: true; durationMs: number } | { ok: false; durationMs: number; errorMsg: string };
+
+async function runCmd(cmd: string, cwd: string): Promise<RunResult> {
+	const start = Date.now();
+	const result = await $`${{ raw: cmd }}`.cwd(cwd).quiet().nothrow();
+	const durationMs = Date.now() - start;
+	if (result.exitCode === 0) {
+		return { ok: true, durationMs };
+	}
+	const output = result.stderr.toString() || result.stdout.toString();
+	const errorMsg = output.slice(-2000) || `exit code ${result.exitCode}`;
+	return { ok: false, durationMs, errorMsg };
+}
+
+export async function runVerify(opts: VerifyOptions, deps: RunVerifyDeps = defaultRunVerifyDeps): Promise<VerifyResult> {
 	const steps: VerifyStepResult[] = [];
 	const issueNum = opts.issueNumber ?? 0;
 
@@ -22,56 +51,46 @@ export async function runVerify(opts: VerifyOptions): Promise<VerifyResult> {
 		: opts.verify;
 
 	for (const step of verifySteps) {
-		log.info(`Running ${step.name}: ${step.cmd}`);
-		const start = Date.now();
-		try {
-			await $`${{ raw: step.cmd }}`.cwd(opts.cwd).quiet();
-			const durationMs = Date.now() - start;
-			log.ok(`${step.name} passed`);
-			steps.push({ name: step.name, ok: true, durationMs });
+		deps.log.info(`Running ${step.name}: ${step.cmd}`);
+		const res = await runCmd(step.cmd, opts.cwd);
+		if (res.ok) {
+			deps.log.ok(`${step.name} passed`);
+			steps.push({ name: step.name, ok: true, durationMs: res.durationMs });
 			opts.logger?.verifyPass(issueNum, step.name);
-		} catch (err) {
-			const durationMs = Date.now() - start;
-			const output = err instanceof Error ? err.message : String(err);
-			const errorMsg = output.slice(-2000);
-			steps.push({ name: step.name, ok: false, durationMs, error: errorMsg });
-			opts.logger?.verifyFail(issueNum, step.name, errorMsg);
-			return { ok: false, steps, failedStep: step.name, error: errorMsg };
+		} else {
+			steps.push({ name: step.name, ok: false, durationMs: res.durationMs, error: res.errorMsg });
+			opts.logger?.verifyFail(issueNum, step.name, res.errorMsg);
+			return { ok: false, steps, failedStep: step.name, error: res.errorMsg };
 		}
 	}
 
 	// E2E (only if configured and not skipped)
 	if (opts.e2e && !opts.skipE2e) {
-		log.info(`Running E2E: ${opts.e2e.run}`);
-		const start = Date.now();
-		try {
-			await $`${{ raw: opts.e2e.run }}`.cwd(opts.cwd).quiet();
-			const durationMs = Date.now() - start;
-			log.ok('E2E passed');
-			steps.push({ name: 'e2e', ok: true, durationMs });
+		deps.log.info(`Running E2E: ${opts.e2e.run}`);
+		const e2eRes = await runCmd(opts.e2e.run, opts.cwd);
+		if (e2eRes.ok) {
+			deps.log.ok('E2E passed');
+			steps.push({ name: 'e2e', ok: true, durationMs: e2eRes.durationMs });
 			opts.logger?.verifyPass(issueNum, 'e2e');
-		} catch {
-			log.warn('E2E failed — attempting snapshot update...');
-			try {
-				await $`${{ raw: opts.e2e.update }}`.cwd(opts.cwd).quiet();
-				await $`${{ raw: opts.e2e.run }}`.cwd(opts.cwd).quiet();
-				const durationMs = Date.now() - start;
-				log.ok('E2E passed after snapshot update');
-				steps.push({ name: 'e2e (after snapshot update)', ok: true, durationMs });
+		} else {
+			// First run failed — attempt snapshot update then re-run
+			deps.log.warn('E2E failed — attempting snapshot update...');
+			await runCmd(opts.e2e.update, opts.cwd);
+			const retryRes = await runCmd(opts.e2e.run, opts.cwd);
+			if (retryRes.ok) {
+				deps.log.ok('E2E passed after snapshot update');
+				steps.push({ name: 'e2e (after snapshot update)', ok: true, durationMs: retryRes.durationMs });
 				opts.logger?.verifyPass(issueNum, 'e2e (after snapshot update)');
 				// Stage updated snapshots
 				const glob = opts.e2e.snapshotGlob;
-				await $`git -C ${opts.cwd} add -A ${glob}`.quiet().catch(() => {});
+				await $`git -C ${opts.cwd} add -A ${glob}`.quiet().nothrow();
 				await $`git -C ${opts.cwd} commit -m ${'test: update E2E snapshots for #' + issueNum}`
 					.quiet()
-					.catch(() => {});
-			} catch (err) {
-				const durationMs = Date.now() - start;
-				const output = err instanceof Error ? err.message : String(err);
-				const errorMsg = output.slice(-2000);
-				steps.push({ name: 'e2e', ok: false, durationMs, error: errorMsg });
-				opts.logger?.verifyFail(issueNum, 'e2e', errorMsg);
-				return { ok: false, steps, failedStep: 'e2e', error: errorMsg };
+					.nothrow();
+			} else {
+				steps.push({ name: 'e2e', ok: false, durationMs: retryRes.durationMs, error: retryRes.errorMsg });
+				opts.logger?.verifyFail(issueNum, 'e2e', retryRes.errorMsg);
+				return { ok: false, steps, failedStep: 'e2e', error: retryRes.errorMsg };
 			}
 		}
 	}

@@ -1,15 +1,16 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { defaultFsAdapter } from '@shared/adapters/fs.ts';
 import {
 	parseFinalizeFlags,
 	loadFinalizeState,
 	saveFinalizeState,
 	initFinalizeState
-} from './index.ts';
-import { determineMergeOrder } from '../../shared/github.ts';
-import type { MergeOrder, FinalizeState } from './types.ts';
+} from '@tools/finalize/index.ts';
+import { determineMergeOrder } from '@shared/github.ts';
+import type { MergeOrder } from '@shared/github.ts';
+import type { FinalizeState } from '@tools/finalize/types.ts';
 
 describe('parseFinalizeFlags', () => {
 	test('parses --dry-run', () => {
@@ -111,11 +112,12 @@ describe('finalize state management', () => {
 	let tempDir: string;
 
 	beforeEach(() => {
-		tempDir = mkdtempSync(join(tmpdir(), 'pai-finalize-state-'));
+		tempDir = join(tmpdir(), `pai-finalize-state-${crypto.randomUUID()}`);
+		defaultFsAdapter.mkdirp(tempDir);
 	});
 
 	afterEach(() => {
-		rmSync(tempDir, { recursive: true, force: true });
+		defaultFsAdapter.rmrf(tempDir);
 	});
 
 	test('state roundtrip: save → load → compare', () => {

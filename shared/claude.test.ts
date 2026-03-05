@@ -1,8 +1,22 @@
-import { describe, test, expect } from 'bun:test';
-import { runClaude } from 'shared/claude.ts';
-import type { RunClaudeDeps } from 'shared/claude.ts';
+import { describe, test, expect, spyOn } from 'bun:test';
+import { runClaude, defaultDeps, type ClaudeDeps, type ClaudeProcess, type RunClaudeOpts } from '@shared/claude.ts';
 
-function makeProc(chunks: string[], exitCode = 0) {
+function makeProc(output: string, exitCode: number): ClaudeProcess {
+	const encoder = new TextEncoder();
+	const bytes = encoder.encode(output);
+	const stream = new ReadableStream<Uint8Array>({
+		start(controller) {
+			controller.enqueue(bytes);
+			controller.close();
+		},
+	});
+	return {
+		stdout: stream,
+		exited: Promise.resolve(exitCode),
+	};
+}
+
+function makeChunkedProc(chunks: string[], exitCode: number): ClaudeProcess {
 	const encoder = new TextEncoder();
 	const stream = new ReadableStream<Uint8Array>({
 		start(controller) {
@@ -14,69 +28,180 @@ function makeProc(chunks: string[], exitCode = 0) {
 	});
 	return {
 		stdout: stream,
-		stderr: new ReadableStream<Uint8Array>({ start(c) { c.close(); } }),
 		exited: Promise.resolve(exitCode),
 	};
 }
 
-function makeDeps(chunks: string[], exitCode = 0): RunClaudeDeps {
+function makeDeps(output: string, exitCode: number): ClaudeDeps & {
+	calls: Array<{ cmd: string[]; opts: Parameters<ClaudeDeps['spawn']>[1] }>;
+} {
+	const calls: Array<{ cmd: string[]; opts: Parameters<ClaudeDeps['spawn']>[1] }> = [];
 	return {
-		spawn: (_cmd: string[], _opts: object) => makeProc(chunks, exitCode) as ReturnType<typeof Bun.spawn>,
-		env: { HOME: '/home/test' },
+		spawn: (cmd, opts) => {
+			calls.push({ cmd, opts });
+			return makeProc(output, exitCode);
+		},
+		env: { HOME: '/home/test', PATH: '/usr/bin' },
+		calls,
+	};
+}
+
+function makeChunkedDeps(chunks: string[], exitCode: number): ClaudeDeps & {
+	calls: Array<{ cmd: string[]; opts: Parameters<ClaudeDeps['spawn']>[1] }>;
+} {
+	const calls: Array<{ cmd: string[]; opts: Parameters<ClaudeDeps['spawn']>[1] }> = [];
+	return {
+		spawn: (cmd, opts) => {
+			calls.push({ cmd, opts });
+			return makeChunkedProc(chunks, exitCode);
+		},
+		env: { HOME: '/home/test', PATH: '/usr/bin' },
+		calls,
 	};
 }
 
 describe('runClaude', () => {
-	test('returns concatenated output from all chunks', async () => {
-		const result = await runClaude(
-			{ prompt: 'test', model: 'claude-3', cwd: '/tmp' },
-			makeDeps(['hello ', 'world']),
-		);
+	test('returns ok:true and output when exit code is 0', async () => {
+		const deps = makeDeps('some output text', 0);
+		const opts: RunClaudeOpts = { prompt: 'hello', model: 'haiku', cwd: '/tmp' };
+		const result = await runClaude(opts, deps);
 		expect(result.ok).toBe(true);
-		expect(result.output).toBe('hello world');
+		expect(result.output).toBe('some output text');
+	});
+
+	test('returns ok:false when exit code is non-zero', async () => {
+		const deps = makeDeps('error output', 1);
+		const opts: RunClaudeOpts = { prompt: 'hello', model: 'haiku', cwd: '/tmp' };
+		const result = await runClaude(opts, deps);
+		expect(result.ok).toBe(false);
+	});
+
+	test('always includes -p and --model args', async () => {
+		const deps = makeDeps('', 0);
+		await runClaude({ prompt: 'p', model: 'sonnet', cwd: '/tmp' }, deps);
+		expect(deps.calls[0].cmd).toContain('-p');
+		expect(deps.calls[0].cmd).toContain('--model');
+		expect(deps.calls[0].cmd).toContain('sonnet');
+	});
+
+	test('includes --permission-mode when permissionMode is set', async () => {
+		const deps = makeDeps('', 0);
+		await runClaude({ prompt: 'p', model: 'haiku', cwd: '/tmp', permissionMode: 'bypassPermissions' }, deps);
+		const cmd = deps.calls[0].cmd;
+		expect(cmd).toContain('--permission-mode');
+		expect(cmd).toContain('bypassPermissions');
+	});
+
+	test('omits --permission-mode when permissionMode is not set', async () => {
+		const deps = makeDeps('', 0);
+		await runClaude({ prompt: 'p', model: 'haiku', cwd: '/tmp' }, deps);
+		expect(deps.calls[0].cmd).not.toContain('--permission-mode');
+	});
+
+	test('includes --allowedTools when allowedTools is set', async () => {
+		const deps = makeDeps('', 0);
+		await runClaude({ prompt: 'p', model: 'haiku', cwd: '/tmp', allowedTools: 'Bash Edit' }, deps);
+		const cmd = deps.calls[0].cmd;
+		expect(cmd).toContain('--allowedTools');
+		expect(cmd).toContain('Bash Edit');
+	});
+
+	test('omits --allowedTools when allowedTools is not set', async () => {
+		const deps = makeDeps('', 0);
+		await runClaude({ prompt: 'p', model: 'haiku', cwd: '/tmp' }, deps);
+		expect(deps.calls[0].cmd).not.toContain('--allowedTools');
+	});
+
+	test('spawn is called with claude as first command token', async () => {
+		const deps = makeDeps('', 0);
+		await runClaude({ prompt: 'p', model: 'haiku', cwd: '/tmp' }, deps);
+		expect(deps.calls[0].cmd[0]).toBe('claude');
+	});
+
+	test('passes cwd from opts to spawn', async () => {
+		const deps = makeDeps('', 0);
+		await runClaude({ prompt: 'p', model: 'haiku', cwd: '/repo/myproject' }, deps);
+		expect(deps.calls[0].opts.cwd).toBe('/repo/myproject');
+	});
+
+	test('env passed to spawn includes deps.env keys and CLAUDECODE empty string', async () => {
+		const deps = makeDeps('', 0);
+		await runClaude({ prompt: 'p', model: 'haiku', cwd: '/tmp' }, deps);
+		const spawnEnv = deps.calls[0].opts.env;
+		expect(spawnEnv['HOME']).toBe('/home/test');
+		expect(spawnEnv['CLAUDECODE']).toBe('');
+	});
+
+	test('env skips undefined values from deps.env', async () => {
+		const deps = makeDeps('', 0);
+		(deps.env as Record<string, string | undefined>)['MAYBE_UNSET'] = undefined;
+		await runClaude({ prompt: 'p', model: 'haiku', cwd: '/tmp' }, deps);
+		const spawnEnv = deps.calls[0].opts.env;
+		expect('MAYBE_UNSET' in spawnEnv).toBe(false);
+	});
+
+	test('stdin blob contains the prompt text', async () => {
+		const deps = makeDeps('', 0);
+		await runClaude({ prompt: 'my prompt content', model: 'haiku', cwd: '/tmp' }, deps);
+		const blob = deps.calls[0].opts.stdin;
+		const text = await blob.text();
+		expect(text).toBe('my prompt content');
 	});
 
 	test('calls onChunk for each streamed chunk', async () => {
 		const received: string[] = [];
+		const deps = makeChunkedDeps(['foo', 'bar', 'baz'], 0);
 		await runClaude(
-			{ prompt: 'test', model: 'claude-3', cwd: '/tmp', onChunk: (c) => received.push(c) },
-			makeDeps(['foo', 'bar', 'baz']),
+			{ prompt: 'test', model: 'haiku', cwd: '/tmp', onChunk: (c) => received.push(c) },
+			deps,
 		);
 		expect(received).toEqual(['foo', 'bar', 'baz']);
 	});
 
 	test('onChunk chunks concatenate to full output', async () => {
 		const received: string[] = [];
+		const deps = makeChunkedDeps(['line1\n', 'line2\n', 'line3\n'], 0);
 		const result = await runClaude(
-			{ prompt: 'test', model: 'claude-3', cwd: '/tmp', onChunk: (c) => received.push(c) },
-			makeDeps(['line1\n', 'line2\n', 'line3\n']),
+			{ prompt: 'test', model: 'haiku', cwd: '/tmp', onChunk: (c) => received.push(c) },
+			deps,
 		);
 		expect(received.join('')).toBe(result.output);
 	});
 
 	test('works without onChunk provided', async () => {
+		const deps = makeDeps('output', 0);
 		const result = await runClaude(
-			{ prompt: 'test', model: 'claude-3', cwd: '/tmp' },
-			makeDeps(['output']),
+			{ prompt: 'test', model: 'haiku', cwd: '/tmp' },
+			deps,
 		);
 		expect(result.output).toBe('output');
 	});
 
-	test('returns ok: false on non-zero exit code', async () => {
-		const result = await runClaude(
-			{ prompt: 'test', model: 'claude-3', cwd: '/tmp' },
-			makeDeps(['error output'], 1),
-		);
-		expect(result.ok).toBe(false);
-		expect(result.output).toBe('error output');
-	});
-
 	test('returns empty output for empty stream', async () => {
+		const deps = makeChunkedDeps([], 0);
 		const result = await runClaude(
-			{ prompt: 'test', model: 'claude-3', cwd: '/tmp' },
-			makeDeps([]),
+			{ prompt: 'test', model: 'haiku', cwd: '/tmp' },
+			deps,
 		);
 		expect(result.output).toBe('');
 		expect(result.ok).toBe(true);
+	});
+});
+
+describe('defaultDeps', () => {
+	test('defaultDeps.spawn delegates to Bun.spawn', () => {
+		const fakeProc = makeProc('hello', 0);
+		const spy = spyOn(Bun, 'spawn').mockReturnValue(fakeProc as ReturnType<typeof Bun.spawn>);
+		const opts = {
+			cwd: '/tmp',
+			stdin: new Blob(['prompt']),
+			stdout: 'pipe' as const,
+			stderr: 'pipe' as const,
+			env: { TEST: 'value' },
+		};
+		const result = defaultDeps.spawn(['claude', '-p'], opts);
+		expect(spy).toHaveBeenCalledWith(['claude', '-p'], opts);
+		expect(result).toBe(fakeProc);
+		spy.mockRestore();
 	});
 });

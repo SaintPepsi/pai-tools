@@ -5,11 +5,22 @@
  * and agent-driven issue implementation via the Claude CLI.
  */
 
-import { log, Spinner } from '../../shared/log.ts';
-import { runClaude } from '../../shared/claude.ts';
-import type { RunLogger } from '../../shared/logging.ts';
-import type { GitHubIssue, OrchestratorConfig } from './types.ts';
-import { fixVerificationFailure as _fixVerificationFailure } from './verify-fixer.ts';
+import { log, RollingWindow } from 'shared/log.ts';
+import { runClaude as _runClaude } from 'shared/claude.ts';
+import type { RunClaudeOpts } from 'shared/claude.ts';
+import type { RunLogger } from 'shared/logging.ts';
+import type { GitHubIssue, OrchestratorConfig } from 'tools/orchestrator/types.ts';
+import { fixVerificationFailure as _fixVerificationFailure } from 'tools/orchestrator/verify-fixer.ts';
+
+export interface AgentRunnerDeps {
+	makeWindow: (header: string, logPath: string) => RollingWindow;
+	runClaude: (opts: RunClaudeOpts) => Promise<{ ok: boolean; output: string }>;
+}
+
+const defaultDeps: AgentRunnerDeps = {
+	makeWindow: (header, logPath) => new RollingWindow({ header, logPath }),
+	runClaude: _runClaude,
+};
 
 export async function assessIssueSize(
 	issue: GitHubIssue,
@@ -45,10 +56,9 @@ Respond in EXACTLY this JSON format (no markdown, no code fences):
 If shouldSplit is false, proposedSplits should be an empty array.
 Be conservative — only split if it's genuinely too large. Most issues with clear acceptance criteria can be done in one pass.`;
 
-	const spinner = new Spinner();
-	spinner.start(`Assessing #${issue.number} size`);
+	log.step(`Assessing #${issue.number} size`);
 
-	const { output: rawResult } = await runClaude({
+	const { output: rawResult } = await _runClaude({
 		prompt,
 		model: config.models.assess,
 		cwd: repoRoot
@@ -57,21 +67,21 @@ Be conservative — only split if it's genuinely too large. Most issues with cle
 		output: ''
 	}));
 
-	spinner.stop();
-
-	try {
-		const jsonMatch: RegExpMatchArray | null = rawResult.match(/\{[\s\S]*\}/);
-		if (!jsonMatch) {
-			return {
-				shouldSplit: false,
-				reasoning: 'No JSON found in assessment response',
-				proposedSplits: []
-			};
-		}
-		return JSON.parse(jsonMatch[0]);
-	} catch {
-		return { shouldSplit: false, reasoning: 'Failed to parse assessment', proposedSplits: [] };
+	const jsonMatch = rawResult.match(/\{[\s\S]*\}/);
+	if (!jsonMatch) {
+		return {
+			shouldSplit: false,
+			reasoning: 'No JSON found in assessment response',
+			proposedSplits: []
+		};
 	}
+
+	type AssessResult = { shouldSplit: boolean; proposedSplits: { title: string; body: string }[]; reasoning: string };
+	const parsed = await Promise.resolve(jsonMatch[0])
+		.then(s => JSON.parse(s) as AssessResult)
+		.catch(() => null);
+
+	return parsed ?? { shouldSplit: false, reasoning: 'Failed to parse assessment', proposedSplits: [] };
 }
 
 export function buildImplementationPrompt(
@@ -128,22 +138,24 @@ export async function implementIssue(
 	baseBranch: string,
 	config: OrchestratorConfig,
 	worktreePath: string,
-	logger: RunLogger
+	logger: RunLogger,
+	deps: AgentRunnerDeps = defaultDeps
 ): Promise<{ ok: boolean; error?: string }> {
 	const prompt = buildImplementationPrompt(issue, branchName, baseBranch, config, worktreePath);
 
-	const spinner = new Spinner();
-	spinner.start(`Agent implementing #${issue.number}`);
+	const header = `Agent implementing #${issue.number}`;
+	const window = deps.makeWindow(header, logger.path);
 
-	const result = await runClaude({
+	const result = await deps.runClaude({
 		prompt,
 		model: config.models.implement,
 		cwd: worktreePath,
 		permissionMode: 'acceptEdits',
-		allowedTools: config.allowedTools
+		allowedTools: config.allowedTools,
+		onChunk: (chunk) => window.update(chunk),
 	});
 
-	spinner.stop();
+	window.clear();
 	log.dim(result.output.slice(-500));
 
 	// Log full agent output

@@ -17,11 +17,12 @@
  *   --no-verify      Skip verification requirement
  */
 
-import { orchestrate, parseFlags } from './tools/orchestrator/index.ts';
-import { analyze, parseAnalyzeFlags } from './tools/analyze/index.ts';
-import { verify, parseVerifyFlags } from './tools/verify/index.ts';
-import { finalize, parseFinalizeFlags } from './tools/finalize/index.ts';
-import { setup } from './tools/setup.ts';
+import { orchestrate, parseFlags } from 'tools/orchestrator/index.ts';
+import { analyze, parseAnalyzeFlags } from 'tools/analyze/index.ts';
+import { verify, parseVerifyFlags } from 'tools/verify/index.ts';
+import { finalize, parseFinalizeFlags } from 'tools/finalize/index.ts';
+import { deps, parseDepsFlags } from 'tools/deps/index.ts';
+import { setup } from 'tools/setup.ts';
 import { $ } from 'bun';
 import { join } from 'node:path';
 
@@ -40,6 +41,7 @@ const HELP = `\x1b[36mpait\x1b[0m — PAI Tools CLI
   analyze        Analyze file structure, suggest splits (AI-powered)
   verify         Run verification commands
   finalize       Merge orchestrated PRs
+  deps           Manage GitHub issue dependency relationships
   update         Pull latest pai-tools from remote
   version        Show current version
   setup          Register pait globally and configure PATH
@@ -81,6 +83,15 @@ const HELP = `\x1b[36mpait\x1b[0m — PAI Tools CLI
   --from <N>          Start from issue #N
   --auto-resolve      Resolve conflicts via Claude (non-interactive)
 
+\x1b[1mDEPS FLAGS\x1b[0m
+  --issue <N>         Target issue number
+  --blocks <N>        Issue that the target issue blocks
+  --blocked-by <N>    Issue that blocks the target issue
+  --parent <N>        Parent issue number (sets a sub-issue relationship)
+  --child <N>         Child/sub-issue number
+  --apply             Apply pending changes without prompting
+  --json              Output as JSON instead of terminal format
+
 \x1b[90mhttps://github.com/SaintPepsi/pai-tools\x1b[0m
 `;
 
@@ -102,6 +113,10 @@ const commands = new Map<string, CommandHandler>([
 	['finalize', async () => {
 		const flags = parseFinalizeFlags(process.argv.slice(3));
 		await finalize(flags);
+	}],
+	['deps', async () => {
+		const flags = parseDepsFlags(process.argv.slice(3));
+		await deps(flags);
 	}],
 	['setup', setup],
 	['update', async () => {

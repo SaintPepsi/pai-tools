@@ -6,17 +6,21 @@
  * failed issues are marked `blocked`.
  */
 
-import { log } from '@shared/log.ts';
+import { log, RollingWindow } from '@shared/log.ts';
+import { runClaude } from '@shared/claude.ts';
 import { RunLogger } from '@shared/logging.ts';
 import { saveState } from '@shared/state.ts';
 import { createWorktree, removeWorktree } from '@shared/git.ts';
 import { createPR } from '@shared/github.ts';
+import type { GitHubIssue } from '@shared/github.ts';
 import { runVerify } from '@tools/verify/runner.ts';
 import { implementIssue } from '@tools/orchestrator/agent-runner.ts';
 import { fixVerificationFailure } from '@tools/orchestrator/verify-fixer.ts';
 import { buildPRBody } from '@tools/orchestrator/execution.ts';
-import { getIssueState } from '@tools/orchestrator/state-helpers.ts';
+import { getIssueState, checkSplitParentCompletion } from '@tools/orchestrator/state-helpers.ts';
 import { withRetries } from '@tools/orchestrator/retry.ts';
+import { checkRequirements as _checkRequirements } from '@tools/orchestrator/requirements-check.ts';
+import type { RequirementsCheckResult } from '@tools/orchestrator/requirements-check.ts';
 import { printStatus } from '@tools/orchestrator/display.ts';
 import type {
 	DependencyNode,
@@ -79,6 +83,7 @@ export interface ParallelGitDeps {
 
 export interface ParallelGithubDeps {
 	createPR: typeof createPR;
+	closeGitHubIssue: (issueNumber: number) => Promise<void>;
 }
 
 export interface ParallelAgentDeps {
@@ -86,11 +91,21 @@ export interface ParallelAgentDeps {
 	fixVerificationFailure: typeof fixVerificationFailure;
 	runVerify: typeof runVerify;
 	buildPRBody: typeof buildPRBody;
+	checkForChanges: (worktreePath: string, baseBranch: string) => Promise<{ hasChanges: boolean }>;
+	checkRequirements: (opts: {
+		issue: GitHubIssue; baseBranch: string; worktreePath: string;
+		config: OrchestratorConfig; logger: RunLogger;
+	}) => Promise<RequirementsCheckResult>;
+	fixRequirements: (opts: {
+		issue: GitHubIssue; summary: string; criteria: RequirementsCheckResult['criteria'];
+		config: OrchestratorConfig; worktreePath: string; logger: RunLogger;
+	}) => Promise<void>;
 }
 
 export interface ParallelStateDeps {
 	saveState: (state: OrchestratorState, file: string) => void;
 	getIssueState: typeof getIssueState;
+	checkSplitParentCompletion: typeof checkSplitParentCompletion;
 	withRetries: typeof withRetries;
 }
 
@@ -105,12 +120,42 @@ export const defaultParallelDeps: ParallelDeps = {
 	createWorktree,
 	removeWorktree,
 	createPR,
+	closeGitHubIssue: async (issueNumber: number) => {
+		Bun.spawnSync(['gh', 'issue', 'close', String(issueNumber)]);
+	},
 	implementIssue,
 	fixVerificationFailure,
 	runVerify,
 	buildPRBody,
+	checkForChanges: async (worktreePath: string, baseBranch: string) => {
+		const proc = Bun.spawnSync(['git', '-C', worktreePath, 'diff', '--stat', baseBranch]);
+		const output = proc.stdout?.toString().trim() ?? '';
+		return { hasChanges: output.length > 0 };
+	},
+	checkRequirements: async (opts) => _checkRequirements(opts),
+	fixRequirements: async (opts) => {
+		const { issue, summary, criteria, config, worktreePath, logger } = opts;
+		const unmetList = criteria
+			.filter(c => !c.met)
+			.map(c => `- ${c.criterion}: ${c.evidence}`)
+			.join('\n');
+
+		const prompt = `The requirements check for issue #${issue.number} found unmet criteria.\n\nAssessment: ${summary}\n\nUnmet requirements:\n${unmetList}\n\nPlease implement the missing requirements and commit your changes referencing #${issue.number}.`;
+
+		const window = new RollingWindow({ header: `Agent fixing requirements for #${issue.number}`, logPath: logger.path });
+		await runClaude({
+			prompt,
+			model: config.models.implement,
+			cwd: worktreePath,
+			permissionMode: 'acceptEdits',
+			allowedTools: config.allowedTools,
+			onChunk: (chunk) => window.update(chunk),
+		}).catch(() => ({ ok: false, output: '' }));
+		window.clear();
+	},
 	saveState,
 	getIssueState,
+	checkSplitParentCompletion,
 	withRetries,
 	log,
 	printStatus,
@@ -235,6 +280,21 @@ export async function processOneIssue(
 		return;
 	}
 
+	// Zero-diff check
+	const diffCheck = await d.checkForChanges(worktreePath, baseBranch);
+	if (!diffCheck.hasChanges) {
+		iLog.error('Agent produced no changes — nothing to verify');
+		const errMsg = 'Agent produced no changes';
+		await safeUpdateState((s) => {
+			const is = d.getIssueState(s, issueNum, node.issue.title);
+			is.status = 'failed';
+			is.error = errMsg;
+		});
+		logger.issueFailed(issueNum, errMsg);
+		await d.removeWorktree(worktreePath, node.branch, repoRoot, logger, issueNum);
+		return;
+	}
+
 	// Verify (with retries and fix attempts)
 	iLog.info('Running verification pipeline...');
 	let lastVerifyResult: Awaited<ReturnType<typeof runVerify>> | undefined;
@@ -284,6 +344,40 @@ export async function processOneIssue(
 
 	iLog.ok('All verification gates passed');
 
+	// Requirements check (LLM gate)
+	if (!flags.skipRequirements) {
+		iLog.info('Running requirements verification...');
+		let lastReqResult: RequirementsCheckResult | undefined;
+		const reqRetryResult = await d.withRetries(
+			async () => {
+				const r = await d.checkRequirements({ issue: node.issue, baseBranch, worktreePath, config, logger });
+				lastReqResult = r;
+				return r;
+			},
+			async (attempt) => {
+				if (lastReqResult && !lastReqResult.ok) {
+					iLog.warn(`Requirements retry ${attempt + 1}/${config.retries.requirements} — feeding assessment back to agent`);
+					await d.fixRequirements({ issue: node.issue, summary: lastReqResult.summary, criteria: lastReqResult.criteria, config, worktreePath, logger });
+				}
+			},
+			config.retries.requirements + 1,
+		);
+
+		if (!reqRetryResult.ok) {
+			const summary = lastReqResult?.summary ?? 'unknown';
+			const errMsg = `Requirements check failed after ${config.retries.requirements + 1} attempts: ${summary}`;
+			await safeUpdateState((s) => {
+				const is = d.getIssueState(s, issueNum, node.issue.title);
+				is.status = 'failed';
+				is.error = errMsg;
+			});
+			logger.issueFailed(issueNum, errMsg);
+			await d.removeWorktree(worktreePath, node.branch, repoRoot, logger, issueNum);
+			return;
+		}
+		iLog.ok('Requirements verification passed');
+	}
+
 	// Create PR
 	iLog.info('Creating pull request...');
 	const prBody = d.buildPRBody(node.issue, config, flags);
@@ -316,6 +410,14 @@ export async function processOneIssue(
 	});
 	logger.issueComplete(issueNum, prResult.prNumber, durationMs);
 	iLog.ok(`Issue #${issueNum} completed → PR #${prResult.prNumber}`);
+
+	// Check if this completes a split parent
+	const splitResult = d.checkSplitParentCompletion(state, issueNum);
+	if (splitResult?.allComplete) {
+		iLog.ok(`All sub-issues of #${splitResult.parentNumber} complete — closing parent`);
+		await d.closeGitHubIssue(splitResult.parentNumber);
+		await safeUpdateState(() => {}); // persist the state change made by checkSplitParentCompletion
+	}
 }
 
 // ---------------------------------------------------------------------------

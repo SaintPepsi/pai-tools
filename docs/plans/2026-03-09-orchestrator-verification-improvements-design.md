@@ -12,6 +12,10 @@ The orchestrator has 7 gaps identified from production usage:
 6. **Zero-diff detection missing** — Agent produces no code changes, verification passes (clean repo), PR creation fails on no commits.
 7. **Agent prompt allows design-only output** — Agent sometimes treats issues as design discussions instead of implementation tasks.
 
+## Principles
+
+**Programmatic over agent:** If a check can be done without an LLM call, do it programmatically. Only use an agent when the task requires natural language understanding (e.g., comparing a diff against prose acceptance criteria). Deterministic checks are faster, cheaper, and more reliable.
+
 ## Design
 
 ### 1. Zero-diff detection

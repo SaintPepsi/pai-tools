@@ -14,7 +14,8 @@ import { buildGraph, topologicalSort } from '@tools/orchestrator/dependency-grap
 import { runVerify } from '@tools/verify/runner.ts';
 import { assessIssueSize, implementIssue, fixVerificationFailure } from '@tools/orchestrator/agent-runner.ts';
 import { printExecutionPlan, printStatus } from '@tools/orchestrator/display.ts';
-import { getIssueState } from '@tools/orchestrator/state-helpers.ts';
+import { getIssueState, checkSplitParentCompletion } from '@tools/orchestrator/state-helpers.ts';
+import type { SplitCompletionResult } from '@tools/orchestrator/state-helpers.ts';
 import { withRetries } from '@tools/orchestrator/retry.ts';
 import { checkRequirements as _checkRequirements } from '@tools/orchestrator/requirements-check.ts';
 import type { RequirementsCheckResult } from '@tools/orchestrator/requirements-check.ts';
@@ -40,6 +41,7 @@ export interface ExecutionGithubDeps {
 	fetchOpenIssues: typeof fetchOpenIssues;
 	createSubIssues: typeof createSubIssues;
 	createPR: typeof createPR;
+	closeGitHubIssue: (issueNumber: number) => Promise<void>;
 }
 
 export interface ExecutionAgentDeps {
@@ -61,6 +63,7 @@ export interface ExecutionAgentDeps {
 export interface ExecutionStateDeps {
 	saveState: (state: OrchestratorState, file: string) => void;
 	getIssueState: typeof getIssueState;
+	checkSplitParentCompletion: (state: OrchestratorState, completedIssueNumber: number) => SplitCompletionResult | null;
 	withRetries: typeof withRetries;
 }
 
@@ -104,6 +107,9 @@ export const defaultExecutionDeps: ExecutionDeps = {
 	fetchOpenIssues,
 	createSubIssues,
 	createPR,
+	closeGitHubIssue: async (issueNumber: number) => {
+		Bun.spawnSync(['gh', 'issue', 'close', String(issueNumber)]);
+	},
 	assessIssueSize,
 	implementIssue,
 	fixVerificationFailure,
@@ -143,6 +149,7 @@ Please implement the missing requirements and commit your changes referencing #$
 	},
 	saveState,
 	getIssueState,
+	checkSplitParentCompletion,
 	withRetries,
 	buildGraph,
 	topologicalSort,
@@ -490,6 +497,14 @@ export async function runMainLoop(opts: RunMainLoopOptions): Promise<void> {
 		logger.issueComplete(issueNum, prResult.prNumber, durationMs);
 
 		d.log.ok(`Issue #${issueNum} completed → PR #${prResult.prNumber}`);
+
+		// Check if this completes a split parent
+		const splitResult = d.checkSplitParentCompletion(state, issueNum);
+		if (splitResult?.allComplete) {
+			d.log.ok(`All sub-issues of #${splitResult.parentNumber} complete — closing parent`);
+			await d.closeGitHubIssue(splitResult.parentNumber);
+			d.saveState(state, stateFile);
+		}
 
 		if (flags.singleMode) {
 			d.log.step('SINGLE ISSUE COMPLETE');

@@ -13,7 +13,7 @@ import {
 	type ExecutionDeps,
 	type RunMainLoopOptions,
 } from '@tools/orchestrator/execution.ts';
-import { getIssueState } from '@tools/orchestrator/state-helpers.ts';
+import { getIssueState, checkSplitParentCompletion } from '@tools/orchestrator/state-helpers.ts';
 import { withRetries } from '@tools/orchestrator/retry.ts';
 import type { GitHubIssue } from '@shared/github.ts';
 import type {
@@ -100,6 +100,7 @@ function makeDeps(overrides: Partial<ExecutionDeps> = {}): { deps: ExecutionDeps
 		exit: (code) => { throw new Error(`exit(${code})`); },
 		saveState: (...args) => { track('saveState', ...args); },
 		getIssueState,
+		checkSplitParentCompletion,
 		withRetries,
 		buildGraph: () => new Map(),
 		topologicalSort: () => [],
@@ -110,6 +111,7 @@ function makeDeps(overrides: Partial<ExecutionDeps> = {}): { deps: ExecutionDeps
 		fetchOpenIssues: async () => [],
 		createSubIssues: async () => [],
 		createPR: async () => { track('createPR'); return { ok: true, prNumber: 99 }; },
+		closeGitHubIssue: async () => {},
 		assessIssueSize: async () => ({ shouldSplit: false, proposedSplits: [], reasoning: 'small' }),
 		implementIssue: async () => { track('implementIssue'); return { ok: true }; },
 		fixVerificationFailure: async () => {},
@@ -868,6 +870,30 @@ describe('runMainLoop — requirements check', () => {
 
 		expect(fixerCalled).toBe(true);
 		expect(state.issues[1]?.status).toBe('completed');
+	});
+});
+
+// ---------------------------------------------------------------------------
+// runMainLoop — split parent auto-close
+// ---------------------------------------------------------------------------
+
+describe('runMainLoop — split parent auto-close', () => {
+	test('closes split parent when last sub-issue completes', async () => {
+		const issue10 = makeIssue(10, 'Sub A');
+		const graph = makeGraph(makeNode(issue10));
+		const state = makeState();
+		getIssueState(state, 1, 'Parent').status = 'split';
+		state.issues[1].subIssues = [10];
+
+		let closedIssue: number | null = null;
+		const { deps } = makeDeps({
+			closeGitHubIssue: async (num) => { closedIssue = num; },
+		});
+
+		await runMainLoop(makeOpts([10], graph, state, {}, deps));
+
+		expect(state.issues[1]?.status).toBe('completed');
+		expect(closedIssue).toBe(1);
 	});
 });
 

@@ -6,6 +6,11 @@
 
 import type { IssueState, OrchestratorState } from '@tools/orchestrator/types.ts';
 
+export interface SplitCompletionResult {
+	parentNumber: number;
+	allComplete: boolean;
+}
+
 export function initState(): OrchestratorState {
 	return {
 		version: 1,
@@ -32,4 +37,31 @@ export function getIssueState(state: OrchestratorState, num: number, title?: str
 		state.issues[num].title = title;
 	}
 	return state.issues[num];
+}
+
+export function checkSplitParentCompletion(
+	state: OrchestratorState,
+	completedIssueNumber: number
+): SplitCompletionResult | null {
+	// Find a split parent whose subIssues array contains this issue
+	for (const [numStr, issueState] of Object.entries(state.issues)) {
+		if (
+			issueState.status === 'split' &&
+			issueState.subIssues?.includes(completedIssueNumber)
+		) {
+			const parentNumber = Number(numStr);
+			const allComplete = issueState.subIssues.every(
+				(sub) => state.issues[sub]?.status === 'completed'
+			);
+
+			if (allComplete) {
+				issueState.status = 'completed';
+				issueState.completedAt = new Date().toISOString();
+			}
+
+			return { parentNumber, allComplete };
+		}
+	}
+
+	return null;
 }

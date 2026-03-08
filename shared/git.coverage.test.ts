@@ -7,6 +7,7 @@ import { describe, test, expect, mock } from 'bun:test';
 import type { GitDeps } from '@shared/git.ts';
 import type { FsAdapter } from '@shared/adapters/fs.ts';
 import type { RunClaudeOpts } from '@shared/claude.ts';
+import type { RollingWindow } from '@shared/log.ts';
 import {
 	localBranchExists,
 	deleteLocalBranch,
@@ -57,6 +58,7 @@ function makeDeps(overrides: Partial<GitDeps> = {}): GitDeps {
 		env: {},
 		claude: async (_opts: RunClaudeOpts) => ({ ok: false, output: '' }),
 		prompt: async () => '',
+		makeWindow: () => ({ update: () => {}, clear: () => {} }) as unknown as RollingWindow,
 		...overrides,
 	};
 }

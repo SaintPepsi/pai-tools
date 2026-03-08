@@ -14,13 +14,11 @@ import { describe, test, expect } from 'bun:test';
 import { mock } from 'bun:test';
 
 // Mock shared/log.ts BEFORE importing agent-runner so defaultAgentRunnerDeps
-// makeSpinner (new Spinner()) and logDim (log.dim()) use a no-op Spinner and
-// log — covering those function bodies without hitting real stdout.
-const mockSpinnerStart = (msg: string) => { void msg; };
-const mockSpinnerStop = () => {};
+// makeWindow (new RollingWindow()) and logDim (log.dim()) use no-op instances —
+// covering those function bodies without hitting real stdout.
 mock.module('../../shared/log.ts', () => ({
 	log: { info: () => {}, ok: () => {}, warn: () => {}, error: () => {}, step: () => {}, dim: () => {} },
-	Spinner: class { start = mockSpinnerStart; stop = mockSpinnerStop; },
+	RollingWindow: class { update() {} clear() {} },
 }));
 
 // Mock verify-fixer BEFORE importing agent-runner so the re-export wrapper
@@ -43,6 +41,7 @@ import {
 import type { OrchestratorConfig } from '@tools/orchestrator/types.ts';
 import type { GitHubIssue } from '@shared/github.ts';
 import type { RunLogger } from '@shared/logging.ts';
+import type { RollingWindow } from '@shared/log.ts';
 
 // ---------------------------------------------------------------------------
 // Shared fixtures
@@ -92,8 +91,8 @@ function makeDeps(overrides: Partial<AgentRunnerDeps> & {
 	runClaudeOk?: boolean;
 	runClaudeThrows?: boolean;
 	parseJsonResult?: { ok: true; value: unknown } | { ok: false };
-} = {}): { deps: AgentRunnerDeps; spinnerCalls: { started: string[]; stopped: number }; agentCalls: unknown[] } {
-	const spinnerCalls = { started: [] as string[], stopped: 0 };
+} = {}): { deps: AgentRunnerDeps; windowCalls: { headers: string[]; clearCount: number }; agentCalls: unknown[] } {
+	const windowCalls = { headers: [] as string[], clearCount: 0 };
 	const agentCalls: unknown[] = [];
 
 	const deps: AgentRunnerDeps = {
@@ -102,10 +101,13 @@ function makeDeps(overrides: Partial<AgentRunnerDeps> & {
 			if (overrides.runClaudeThrows) throw new Error('Claude error');
 			return { ok: overrides.runClaudeOk ?? true, output: overrides.runClaudeOutput ?? '' };
 		}),
-		makeSpinner: overrides.makeSpinner ?? (() => ({
-			start: (msg: string) => { spinnerCalls.started.push(msg); },
-			stop: () => { spinnerCalls.stopped++; },
-		})),
+		makeWindow: overrides.makeWindow ?? ((header: string, _logPath: string) => {
+			windowCalls.headers.push(header);
+			return {
+				update: () => {},
+				clear: () => { windowCalls.clearCount++; },
+			} as unknown as RollingWindow;
+		}),
 		logDim: overrides.logDim ?? (() => {}),
 		parseJson: overrides.parseJson ?? ((text: string) => {
 			if (overrides.parseJsonResult !== undefined) return overrides.parseJsonResult;
@@ -113,7 +115,7 @@ function makeDeps(overrides: Partial<AgentRunnerDeps> & {
 			return { ok: true as const, value: result };
 		}),
 	};
-	return { deps, spinnerCalls, agentCalls };
+	return { deps, windowCalls, agentCalls };
 }
 
 // ---------------------------------------------------------------------------
@@ -179,7 +181,7 @@ describe('assessIssueSize — happy path', () => {
 		const capturedOpts: Parameters<AgentRunnerDeps['runClaude']>[0][] = [];
 		const deps: AgentRunnerDeps = {
 			runClaude: async (opts) => { capturedOpts.push(opts); return { ok: true, output: JSON.stringify({ shouldSplit: false, reasoning: 'x', proposedSplits: [] }) }; },
-			makeSpinner: () => ({ start: () => {}, stop: () => {} }),
+			makeWindow: () => ({ update: () => {}, clear: () => {} }) as unknown as RollingWindow,
 			logDim: () => {},
 			parseJson: (t) => ({ ok: true as const, value: JSON.parse(t) as unknown }),
 		};
@@ -193,7 +195,7 @@ describe('assessIssueSize — happy path', () => {
 		const capturedOpts: Parameters<AgentRunnerDeps['runClaude']>[0][] = [];
 		const deps: AgentRunnerDeps = {
 			runClaude: async (opts) => { capturedOpts.push(opts); return { ok: true, output: JSON.stringify({ shouldSplit: false, reasoning: 'x', proposedSplits: [] }) }; },
-			makeSpinner: () => ({ start: () => {}, stop: () => {} }),
+			makeWindow: () => ({ update: () => {}, clear: () => {} }) as unknown as RollingWindow,
 			logDim: () => {},
 			parseJson: (t) => ({ ok: true as const, value: JSON.parse(t) as unknown }),
 		};
@@ -203,23 +205,22 @@ describe('assessIssueSize — happy path', () => {
 		expect(capturedOpts[0].cwd).toBe('/my/repo');
 	});
 
-	test('starts and stops spinner', async () => {
-		const { deps, spinnerCalls } = makeDeps({
+	test('calls runClaude with assess model', async () => {
+		const { deps, agentCalls } = makeDeps({
 			runClaudeOutput: JSON.stringify({ shouldSplit: false, reasoning: 'small', proposedSplits: [] }),
 		});
 
 		await assessIssueSize(makeIssue(3), baseConfig, '/repo', deps);
 
-		expect(spinnerCalls.started.length).toBe(1);
-		expect(spinnerCalls.started[0]).toContain('#3');
-		expect(spinnerCalls.stopped).toBe(1);
+		expect(agentCalls.length).toBe(1);
+		expect((agentCalls[0] as { model: string }).model).toBe('claude-haiku');
 	});
 
 	test('includes issue number and title in prompt', async () => {
 		const agentCalls: Parameters<AgentRunnerDeps['runClaude']>[0][] = [];
 		const deps: AgentRunnerDeps = {
 			runClaude: async (opts) => { agentCalls.push(opts); return { ok: true, output: JSON.stringify({ shouldSplit: false, reasoning: 'x', proposedSplits: [] }) }; },
-			makeSpinner: () => ({ start: () => {}, stop: () => {} }),
+			makeWindow: () => ({ update: () => {}, clear: () => {} }) as unknown as RollingWindow,
 			logDim: () => {},
 			parseJson: (t) => ({ ok: true as const, value: JSON.parse(t) as unknown }),
 		};
@@ -330,8 +331,8 @@ describe('implementIssue — happy path', () => {
 		expect(result.error).toContain('Claude agent failed');
 	});
 
-	test('starts and stops spinner', async () => {
-		const { deps, spinnerCalls } = makeDeps({ runClaudeOk: true, runClaudeOutput: '' });
+	test('creates and clears window', async () => {
+		const { deps, windowCalls } = makeDeps({ runClaudeOk: true, runClaudeOutput: '' });
 
 		await implementIssue({
 			issue: makeIssue(5),
@@ -342,9 +343,9 @@ describe('implementIssue — happy path', () => {
 			logger: noopLogger,
 		}, deps);
 
-		expect(spinnerCalls.started.length).toBe(1);
-		expect(spinnerCalls.started[0]).toContain('#5');
-		expect(spinnerCalls.stopped).toBe(1);
+		expect(windowCalls.headers.length).toBe(1);
+		expect(windowCalls.headers[0]).toContain('#5');
+		expect(windowCalls.clearCount).toBe(1);
 	});
 
 	test('calls logDim with last 500 chars of output', async () => {
@@ -395,7 +396,7 @@ describe('implementIssue — happy path', () => {
 		const capturedOpts: Parameters<AgentRunnerDeps['runClaude']>[0][] = [];
 		const deps: AgentRunnerDeps = {
 			runClaude: async (opts) => { capturedOpts.push(opts); return { ok: true, output: '' }; },
-			makeSpinner: () => ({ start: () => {}, stop: () => {} }),
+			makeWindow: () => ({ update: () => {}, clear: () => {} }) as unknown as RollingWindow,
 			logDim: () => {},
 			parseJson: (t) => ({ ok: true as const, value: JSON.parse(t) as unknown }),
 		};
@@ -418,7 +419,7 @@ describe('implementIssue — happy path', () => {
 		const capturedOpts: Parameters<AgentRunnerDeps['runClaude']>[0][] = [];
 		const deps: AgentRunnerDeps = {
 			runClaude: async (opts) => { capturedOpts.push(opts); return { ok: true, output: '' }; },
-			makeSpinner: () => ({ start: () => {}, stop: () => {} }),
+			makeWindow: () => ({ update: () => {}, clear: () => {} }) as unknown as RollingWindow,
 			logDim: () => {},
 			parseJson: (t) => ({ ok: true as const, value: JSON.parse(t) as unknown }),
 		};
@@ -439,7 +440,7 @@ describe('implementIssue — happy path', () => {
 		const capturedOpts: Parameters<AgentRunnerDeps['runClaude']>[0][] = [];
 		const deps: AgentRunnerDeps = {
 			runClaude: async (opts) => { capturedOpts.push(opts); return { ok: true, output: '' }; },
-			makeSpinner: () => ({ start: () => {}, stop: () => {} }),
+			makeWindow: () => ({ update: () => {}, clear: () => {} }) as unknown as RollingWindow,
 			logDim: () => {},
 			parseJson: (t) => ({ ok: true as const, value: JSON.parse(t) as unknown }),
 		};
@@ -461,18 +462,18 @@ describe('implementIssue — happy path', () => {
 });
 
 // ---------------------------------------------------------------------------
-// defaultAgentRunnerDeps — covers makeSpinner and logDim arrow bodies
+// defaultAgentRunnerDeps — covers makeWindow and logDim arrow bodies
 // (shared/log.ts is mocked above so no real stdout is touched)
 // ---------------------------------------------------------------------------
 
 describe('defaultAgentRunnerDeps — default arrow functions', () => {
-	test('makeSpinner returns an object with start and stop', () => {
-		const spinner = defaultAgentRunnerDeps.makeSpinner();
-		expect(typeof spinner.start).toBe('function');
-		expect(typeof spinner.stop).toBe('function');
-		// Call both to hit the mocked Spinner body
-		spinner.start('test label');
-		spinner.stop();
+	test('makeWindow returns an object with update and clear', () => {
+		const window = defaultAgentRunnerDeps.makeWindow('test header', '/tmp/log');
+		expect(typeof window.update).toBe('function');
+		expect(typeof window.clear).toBe('function');
+		// Call both to hit the mocked RollingWindow body
+		window.update('chunk');
+		window.clear();
 	});
 
 	test('logDim calls log.dim without throwing', () => {

@@ -45,7 +45,7 @@ If requirements are ambiguous, make reasonable assumptions and implement.
 2. Compute diff metrics (lines changed, files changed, file types)
 3. Extract acceptance criteria count from issue body (count `- [ ]` checkboxes or numbered items)
 4. Send diff + issue body + metrics to Claude with structured prompt asking for JSON assessment
-5. If `satisfied: false`, invoke fix agent with assessment feedback (same retry pattern as verify-fixer)
+5. If `ok: false`, invoke fix agent with assessment feedback (same retry pattern as verify-fixer)
 6. Retry using existing `withRetries` pattern
 
 **New config:** `retries.requirements` (default: 1) in orchestrator config.
@@ -55,7 +55,7 @@ If requirements are ambiguous, make reasonable assumptions and implement.
 Given this GitHub issue and the git diff, assess whether the implementation
 satisfies the requirements. Return JSON:
 {
-  satisfied: boolean,
+  ok: boolean,
   criteria: [{criterion: string, met: boolean, evidence: string}],
   summary: string
 }

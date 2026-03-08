@@ -5,6 +5,7 @@
  */
 
 import type { IssueState, OrchestratorState } from '@tools/orchestrator/types.ts';
+import { log as sharedLog } from '@shared/log.ts';
 
 export interface SplitCompletionResult {
 	parentNumber: number;
@@ -26,9 +27,9 @@ export const defaultReconciliationDeps: ReconciliationDeps = {
 		};
 	},
 	log: {
-		info: (msg) => console.log(msg),
-		warn: (msg) => console.warn(msg),
-		ok: (msg) => console.log(msg),
+		info: (msg) => sharedLog.info(msg),
+		warn: (msg) => sharedLog.warn(msg),
+		ok: (msg) => sharedLog.ok(msg),
 	},
 };
 

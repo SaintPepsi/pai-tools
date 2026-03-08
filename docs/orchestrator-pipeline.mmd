@@ -1,0 +1,153 @@
+flowchart TD
+    START([pait orchestrate]) --> BANNER[Display banner]
+    BANNER --> CONFIG[Load config & state]
+    CONFIG --> RESET{--reset?}
+    RESET -->|yes| CLEAR[Clear state] --> FLAGS_CHECK{Other flags?}
+    FLAGS_CHECK -->|no| DONE([Exit])
+    FLAGS_CHECK -->|yes| STATUS_CHECK
+    RESET -->|no| STATUS_CHECK{--status?}
+    STATUS_CHECK -->|yes| SHOW_STATUS[Print status] --> DONE
+
+    STATUS_CHECK -->|no| VERIFY_CFG{Verify commands\nconfigured?}
+    VERIFY_CFG -->|no| PROMPT_VERIFY[Prompt for verify commands]
+    PROMPT_VERIFY --> NO_VERIFY{Commands provided?}
+    NO_VERIFY -->|no| FAIL_EXIT([Exit 1])
+    NO_VERIFY -->|yes| SAVE_VERIFY[Save to .pait/orchestrator.json]
+    SAVE_VERIFY --> FETCH
+    VERIFY_CFG -->|yes| FETCH
+
+    FETCH{--file?} -->|yes| READ_MD[Parse markdown file] --> BUILD_GRAPH
+    FETCH -->|no| GH_FETCH[Fetch GitHub issues\nauthor-filtered] --> BUILD_GRAPH
+
+    BUILD_GRAPH[Build dependency graph\nTopological sort] --> PLAN_DISPLAY
+    PLAN_DISPLAY[Display execution plan] --> RECONCILE
+
+    RECONCILE[Reconcile state with GitHub\nCheck PRs / branches / splits] --> DRY_RUN{--dry-run?}
+    DRY_RUN -->|yes| DRY[Show plan without acting] --> DONE
+
+    DRY_RUN -->|no| MODE{--parallel N > 1?}
+    MODE -->|yes| PARALLEL[Run parallel loop\nN concurrent workers]
+    MODE -->|no| SEQ_LOOP
+
+    subgraph SEQ_LOOP [Sequential Loop — per issue]
+        direction TB
+        SKIP_CHECK{Already completed\nor split?} -->|yes| NEXT_ISSUE([Next issue])
+        SKIP_CHECK -->|no| DEP_CHECK
+
+        DEP_CHECK{Dependencies\nmet?} -->|no| HALT_DEP([HALT — unmet deps])
+        DEP_CHECK -->|yes| SPLIT_CHECK
+
+        SPLIT_CHECK{--skip-split?\nor small?} -->|small enough| WORKTREE
+        SPLIT_CHECK -->|too large| SPLIT[Create sub-issues on GitHub]
+        SPLIT --> REFETCH[Re-fetch issues\nRebuild graph] --> SKIP_CHECK
+
+        WORKTREE[Create git worktree\nwith dependency branches] --> IMPLEMENT
+
+        IMPLEMENT[Agent implementation\nClaude + acceptEdits mode]
+        IMPLEMENT --> IMPL_RETRY{Success?}
+        IMPL_RETRY -->|no, retries left| IMPLEMENT
+        IMPL_RETRY -->|no, exhausted| HALT_IMPL([HALT — impl failed])
+        IMPL_RETRY -->|yes| ZERO_DIFF
+
+        ZERO_DIFF[Zero-diff check\ngit diff --stat] --> HAS_CHANGES{Changes\nexist?}
+        HAS_CHANGES -->|no| HALT_ZERO([HALT — no changes])
+        HAS_CHANGES -->|yes| VERIFY_LOOP
+
+        VERIFY_LOOP[Run verification\ntsc / lint / test / build]
+        VERIFY_LOOP --> VERIFY_OK{All pass?}
+        VERIFY_OK -->|no, retries left| FIX_VERIFY[Fix agent\nfeeds errors back] --> VERIFY_LOOP
+        VERIFY_OK -->|no, exhausted| HALT_VERIFY([HALT — verify failed])
+        VERIFY_OK -->|yes| REQ_GATE
+
+        REQ_GATE{--skip-requirements?}
+        REQ_GATE -->|yes| CREATE_PR
+        REQ_GATE -->|no| REQ_CHECK
+
+        REQ_CHECK[Requirements check\nLLM assesses diff vs criteria\n+ substance heuristic]
+        REQ_CHECK --> REQ_OK{Criteria\nmet?}
+        REQ_OK -->|no, retries left| FIX_REQ[Fix agent\nfeeds unmet criteria back] --> REQ_CHECK
+        REQ_OK -->|no, exhausted| HALT_REQ([HALT — requirements unmet])
+        REQ_OK -->|yes| CREATE_PR
+
+        CREATE_PR[Create PR\npush branch + gh pr create] --> CLEANUP
+
+        CLEANUP[Remove worktree\nMark issue completed] --> SPLIT_PARENT
+
+        SPLIT_PARENT{Is sub-issue\nof a split parent?}
+        SPLIT_PARENT -->|no| SINGLE_CHECK
+        SPLIT_PARENT -->|yes, siblings pending| SINGLE_CHECK
+        SPLIT_PARENT -->|yes, all complete| CLOSE_PARENT[Close parent issue\non GitHub] --> SINGLE_CHECK
+
+        SINGLE_CHECK{--single?}
+        SINGLE_CHECK -->|yes| DONE_SINGLE([Done — single mode])
+        SINGLE_CHECK -->|no| NEXT_ISSUE
+    end
+
+    PARALLEL --> DONE_ALL
+    NEXT_ISSUE --> DONE_ALL([All issues completed])
+
+    %% New features (green — dark text on strong green)
+    style ZERO_DIFF fill:#2e7d32,stroke:#1b5e20,color:#fff
+    style REQ_CHECK fill:#2e7d32,stroke:#1b5e20,color:#fff
+    style SPLIT_PARENT fill:#2e7d32,stroke:#1b5e20,color:#fff
+    style RECONCILE fill:#2e7d32,stroke:#1b5e20,color:#fff
+    style CLOSE_PARENT fill:#2e7d32,stroke:#1b5e20,color:#fff
+
+    %% Agent nodes (blue)
+    style IMPLEMENT fill:#1565c0,stroke:#0d47a1,color:#fff
+
+    %% Fix/retry agents (orange)
+    style FIX_VERIFY fill:#e65100,stroke:#bf360c,color:#fff
+    style FIX_REQ fill:#e65100,stroke:#bf360c,color:#fff
+
+    %% Halt nodes (red)
+    style HALT_DEP fill:#c62828,stroke:#b71c1c,color:#fff
+    style HALT_IMPL fill:#c62828,stroke:#b71c1c,color:#fff
+    style HALT_ZERO fill:#c62828,stroke:#b71c1c,color:#fff
+    style HALT_VERIFY fill:#c62828,stroke:#b71c1c,color:#fff
+    style HALT_REQ fill:#c62828,stroke:#b71c1c,color:#fff
+    style FAIL_EXIT fill:#c62828,stroke:#b71c1c,color:#fff
+
+    %% Standard nodes (dark text on light blue-grey)
+    style START fill:#263238,stroke:#1a237e,color:#fff
+    style DONE fill:#263238,stroke:#1a237e,color:#fff
+    style DONE_ALL fill:#263238,stroke:#1a237e,color:#fff
+    style DONE_SINGLE fill:#263238,stroke:#1a237e,color:#fff
+    style BANNER fill:#37474f,stroke:#263238,color:#fff
+    style CONFIG fill:#37474f,stroke:#263238,color:#fff
+    style CLEAR fill:#37474f,stroke:#263238,color:#fff
+    style SHOW_STATUS fill:#37474f,stroke:#263238,color:#fff
+    style PROMPT_VERIFY fill:#37474f,stroke:#263238,color:#fff
+    style SAVE_VERIFY fill:#37474f,stroke:#263238,color:#fff
+    style READ_MD fill:#37474f,stroke:#263238,color:#fff
+    style GH_FETCH fill:#37474f,stroke:#263238,color:#fff
+    style BUILD_GRAPH fill:#37474f,stroke:#263238,color:#fff
+    style PLAN_DISPLAY fill:#37474f,stroke:#263238,color:#fff
+    style DRY fill:#37474f,stroke:#263238,color:#fff
+    style PARALLEL fill:#37474f,stroke:#263238,color:#fff
+    style WORKTREE fill:#37474f,stroke:#263238,color:#fff
+    style SPLIT fill:#37474f,stroke:#263238,color:#fff
+    style REFETCH fill:#37474f,stroke:#263238,color:#fff
+    style VERIFY_LOOP fill:#455a64,stroke:#263238,color:#fff
+    style CREATE_PR fill:#37474f,stroke:#263238,color:#fff
+    style CLEANUP fill:#37474f,stroke:#263238,color:#fff
+    style NEXT_ISSUE fill:#37474f,stroke:#263238,color:#fff
+
+    %% Decision diamonds (dark blue-grey)
+    style RESET fill:#455a64,stroke:#263238,color:#fff
+    style FLAGS_CHECK fill:#455a64,stroke:#263238,color:#fff
+    style STATUS_CHECK fill:#455a64,stroke:#263238,color:#fff
+    style VERIFY_CFG fill:#455a64,stroke:#263238,color:#fff
+    style NO_VERIFY fill:#455a64,stroke:#263238,color:#fff
+    style FETCH fill:#455a64,stroke:#263238,color:#fff
+    style DRY_RUN fill:#455a64,stroke:#263238,color:#fff
+    style MODE fill:#455a64,stroke:#263238,color:#fff
+    style SKIP_CHECK fill:#455a64,stroke:#263238,color:#fff
+    style DEP_CHECK fill:#455a64,stroke:#263238,color:#fff
+    style SPLIT_CHECK fill:#455a64,stroke:#263238,color:#fff
+    style IMPL_RETRY fill:#455a64,stroke:#263238,color:#fff
+    style HAS_CHANGES fill:#455a64,stroke:#263238,color:#fff
+    style VERIFY_OK fill:#455a64,stroke:#263238,color:#fff
+    style REQ_GATE fill:#455a64,stroke:#263238,color:#fff
+    style REQ_OK fill:#455a64,stroke:#263238,color:#fff
+    style SINGLE_CHECK fill:#455a64,stroke:#263238,color:#fff

@@ -24,7 +24,7 @@ const minimalConfig: OrchestratorConfig = {
 	baseBranch: 'main',
 	worktreeDir: '.pait/worktrees',
 	models: { implement: 'sonnet', assess: 'haiku' },
-	retries: { implement: 1, verify: 1 },
+	retries: { implement: 1, verify: 1, requirements: 1 },
 	allowedTools: 'Bash Edit Write Read',
 	verify: []
 };
@@ -112,6 +112,14 @@ describe('buildImplementationPrompt', () => {
 		const prompt = buildImplementationPrompt(issue, 'feat/8-new-feature', 'main', minimalConfig, '/repo');
 
 		expect(prompt).toContain('CLAUDE.md');
+	});
+
+	test('buildImplementationPrompt includes anti-design enforcement', () => {
+		const issue = makeIssue(1, 'Add auth', 'Build login page');
+		const prompt = buildImplementationPrompt(issue, 'feat/1-auth', 'main', minimalConfig, '/repo');
+		expect(prompt).toContain('MUST write code and make commits');
+		expect(prompt).toContain('Do not ask clarifying questions');
+		expect(prompt).toContain('Do not propose designs');
 	});
 
 	test('returns a string', () => {

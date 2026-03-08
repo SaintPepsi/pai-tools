@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { log } from '@shared/log.ts';
 import { RunLogger } from '@shared/logging.ts';
 import { findRepoRoot, loadToolConfig, saveToolConfig, getStateFilePath, migrateStateIfNeeded } from '@shared/config.ts';
-import { loadState, clearState } from '@shared/state.ts';
+import { loadState, clearState, saveState } from '@shared/state.ts';
 import { fetchOpenIssues } from '@shared/github.ts';
 import { parseMarkdownContent } from '@tools/orchestrator/markdown-source.ts';
 import { buildGraph, topologicalSort, computeTiers } from '@tools/orchestrator/dependency-graph.ts';
@@ -19,7 +19,7 @@ import { promptForVerifyCommands } from '@tools/orchestrator/prompt.ts';
 import { runDryRun } from '@tools/orchestrator/dry-run.ts';
 import { runMainLoop } from '@tools/orchestrator/execution.ts';
 import { runParallelLoop } from '@tools/orchestrator/parallel.ts';
-import { initState } from '@tools/orchestrator/state-helpers.ts';
+import { initState, reconcileWithGitHub } from '@tools/orchestrator/state-helpers.ts';
 import { ORCHESTRATOR_DEFAULTS } from '@tools/orchestrator/defaults.ts';
 import type {
 	OrchestratorConfig,
@@ -184,6 +184,16 @@ export async function orchestrate(flags: OrchestratorFlags, deps: OrchestrateDep
 	const runMode = flags.singleMode ? 'single' : useParallel ? `parallel:${flags.parallel}` : 'full';
 
 	const state = deps.loadState(stateFile) ?? deps.initState();
+
+	// Reconcile local state with actual GitHub/git state
+	if (!flags.reset) {
+		deps.log.info('Reconciling state with GitHub...');
+		const corrections = await reconcileWithGitHub(state, repoRoot);
+		if (corrections.length > 0) {
+			saveState(state, stateFile);
+		}
+	}
+
 	logger.runStart({
 		mode: runMode,
 		issueCount: executionOrder.length,

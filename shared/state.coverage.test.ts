@@ -15,6 +15,7 @@ function makeMockFs(overrides: Partial<FsAdapter> = {}): FsAdapter {
 		mkdirp: () => {},
 		copyFile: () => {},
 		rmrf: () => {},
+		mkdtemp: (prefix) => `${prefix}test`,
 		parseJson: (c) => { try { return JSON.parse(c); } catch { return null; } },
 		...overrides,
 	};

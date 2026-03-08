@@ -25,7 +25,7 @@ const baseConfig: OrchestratorConfig = {
 	baseBranch: 'main',
 	worktreeDir: '.pait/worktrees',
 	models: { implement: 'claude-sonnet', assess: 'claude-haiku' },
-	retries: { implement: 0, verify: 0 },
+	retries: { implement: 0, verify: 0, requirements: 0 },
 	allowedTools: 'Bash Edit Write Read',
 	verify: [{ name: 'test', cmd: 'bun test' }],
 };
@@ -36,6 +36,7 @@ const baseFlags: OrchestratorFlags = {
 	statusOnly: false,
 	skipE2e: true,
 	skipSplit: true,
+	skipRequirements: false,
 	noVerify: false,
 	singleMode: false,
 	singleIssue: null,

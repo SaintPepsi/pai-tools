@@ -66,6 +66,7 @@ export function parseFlags(args: string[], deps: FlagsDeps = defaultFlagsDeps): 
 		statusOnly: args.includes('--status'),
 		skipE2e: args.includes('--skip-e2e'),
 		skipSplit: args.includes('--skip-split'),
+		skipRequirements: args.includes('--skip-requirements'),
 		noVerify: args.includes('--no-verify'),
 		singleMode: args.includes('--single'),
 		singleIssue,

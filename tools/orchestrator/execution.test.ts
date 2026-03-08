@@ -13,7 +13,7 @@ import {
 	type ExecutionDeps,
 	type RunMainLoopOptions,
 } from '@tools/orchestrator/execution.ts';
-import { getIssueState } from '@tools/orchestrator/state-helpers.ts';
+import { getIssueState, checkSplitParentCompletion } from '@tools/orchestrator/state-helpers.ts';
 import { withRetries } from '@tools/orchestrator/retry.ts';
 import type { GitHubIssue } from '@shared/github.ts';
 import type {
@@ -51,14 +51,14 @@ const baseConfig: OrchestratorConfig = {
 	baseBranch: 'main',
 	worktreeDir: '.pait/worktrees',
 	models: { implement: 'claude-sonnet', assess: 'claude-haiku' },
-	retries: { implement: 0, verify: 0 },
+	retries: { implement: 0, verify: 0, requirements: 0 },
 	allowedTools: 'Bash Edit Write Read',
 	verify: [{ name: 'test', cmd: 'bun test' }],
 };
 
 const baseFlags: OrchestratorFlags = {
 	dryRun: false, reset: false, statusOnly: false, skipE2e: true,
-	skipSplit: true, noVerify: false, singleMode: false,
+	skipSplit: true, skipRequirements: false, noVerify: false, singleMode: false,
 	singleIssue: null, fromIssue: null, parallel: 1, file: null,
 };
 
@@ -100,6 +100,7 @@ function makeDeps(overrides: Partial<ExecutionDeps> = {}): { deps: ExecutionDeps
 		exit: (code) => { throw new Error(`exit(${code})`); },
 		saveState: (...args) => { track('saveState', ...args); },
 		getIssueState,
+		checkSplitParentCompletion,
 		withRetries,
 		buildGraph: () => new Map(),
 		topologicalSort: () => [],
@@ -110,10 +111,14 @@ function makeDeps(overrides: Partial<ExecutionDeps> = {}): { deps: ExecutionDeps
 		fetchOpenIssues: async () => [],
 		createSubIssues: async () => [],
 		createPR: async () => { track('createPR'); return { ok: true, prNumber: 99 }; },
+		closeGitHubIssue: async () => {},
 		assessIssueSize: async () => ({ shouldSplit: false, proposedSplits: [], reasoning: 'small' }),
 		implementIssue: async () => { track('implementIssue'); return { ok: true }; },
 		fixVerificationFailure: async () => {},
 		runVerify: async () => { track('runVerify'); return { ok: true, steps: [] }; },
+		checkForChanges: async () => ({ hasChanges: true }),
+		checkRequirements: async () => ({ ok: true, summary: 'All good', criteria: [] }),
+		fixRequirements: async () => {},
 		...overrides,
 	};
 	return { deps, calls };
@@ -696,7 +701,7 @@ describe('runMainLoop — retry fixer callbacks', () => {
 		let fixerCalled = false;
 		let callCount = 0;
 		// retries.implement = 1 means 2 attempts total; fixer runs between them
-		const config: OrchestratorConfig = { ...baseConfig, retries: { implement: 1, verify: 0 } };
+		const config: OrchestratorConfig = { ...baseConfig, retries: { implement: 1, verify: 0, requirements: 0 } };
 		const { deps } = makeDeps({
 			implementIssue: async () => {
 				callCount++;
@@ -720,7 +725,7 @@ describe('runMainLoop — retry fixer callbacks', () => {
 		let fixVerifyCalled = false;
 		let verifyCallCount = 0;
 		// retries.verify = 1 means 2 attempts total; fixer runs between them
-		const config: OrchestratorConfig = { ...baseConfig, retries: { implement: 0, verify: 1 } };
+		const config: OrchestratorConfig = { ...baseConfig, retries: { implement: 0, verify: 1, requirements: 0 } };
 		const { deps } = makeDeps({
 			runVerify: async () => {
 				verifyCallCount++;
@@ -742,7 +747,7 @@ describe('runMainLoop — retry fixer callbacks', () => {
 		const state = makeState();
 		let fixVerifyCalled = false;
 		let verifyCallCount = 0;
-		const config: OrchestratorConfig = { ...baseConfig, retries: { implement: 0, verify: 1 } };
+		const config: OrchestratorConfig = { ...baseConfig, retries: { implement: 0, verify: 1, requirements: 0 } };
 		const { deps } = makeDeps({
 			// fails but with NO failedStep — fixer should be skipped
 			runVerify: async () => {
@@ -757,6 +762,138 @@ describe('runMainLoop — retry fixer callbacks', () => {
 
 		expect(fixVerifyCalled).toBe(false);
 		expect(state.issues[1]?.status).toBe('completed');
+	});
+});
+
+// ---------------------------------------------------------------------------
+// runMainLoop — zero-diff detection
+// ---------------------------------------------------------------------------
+
+describe('runMainLoop — zero-diff detection', () => {
+	test('fails issue when agent produces no changes', async () => {
+		const issue1 = makeIssue(1);
+		const graph = makeGraph(makeNode(issue1));
+		const state = makeState();
+		const { deps } = makeDeps({
+			checkForChanges: async () => ({ hasChanges: false }),
+		});
+
+		await expect(
+			runMainLoop(makeOpts([1], graph, state, {}, deps))
+		).rejects.toThrow('exit(1)');
+		expect(state.issues[1]?.status).toBe('failed');
+		expect(state.issues[1]?.error).toContain('no changes');
+	});
+
+	test('proceeds to verification when agent produces changes', async () => {
+		const issue1 = makeIssue(1);
+		const graph = makeGraph(makeNode(issue1));
+		const state = makeState();
+		const { deps, calls } = makeDeps({
+			checkForChanges: async () => ({ hasChanges: true }),
+		});
+
+		await runMainLoop(makeOpts([1], graph, state, {}, deps));
+
+		expect(calls.some(c => c.fn === 'runVerify')).toBe(true);
+		expect(state.issues[1]?.status).toBe('completed');
+	});
+});
+
+// ---------------------------------------------------------------------------
+// runMainLoop — requirements check
+// ---------------------------------------------------------------------------
+
+describe('runMainLoop — requirements check', () => {
+	test('fails issue when requirements check says not satisfied', async () => {
+		const issue1 = makeIssue(1, 'Add feature', '- [ ] Build the thing');
+		const graph = makeGraph(makeNode(issue1));
+		const state = makeState();
+		const config: OrchestratorConfig = { ...baseConfig, retries: { implement: 0, verify: 0, requirements: 0 } };
+		const { deps } = makeDeps({
+			checkRequirements: async () => ({ ok: false, summary: 'Incomplete', criteria: [] }),
+		});
+
+		await expect(
+			runMainLoop({ ...makeOpts([1], graph, state, {}, deps), config })
+		).rejects.toThrow('exit(1)');
+		expect(state.issues[1]?.status).toBe('failed');
+		expect(state.issues[1]?.error).toContain('Requirements');
+	});
+
+	test('proceeds to PR when requirements check passes', async () => {
+		const issue1 = makeIssue(1, 'Add feature', '- [ ] Build it');
+		const graph = makeGraph(makeNode(issue1));
+		const state = makeState();
+		const { deps, calls } = makeDeps({
+			checkRequirements: async () => ({ ok: true, summary: 'All good', criteria: [] }),
+		});
+
+		await runMainLoop(makeOpts([1], graph, state, {}, deps));
+
+		expect(calls.some(c => c.fn === 'createPR')).toBe(true);
+		expect(state.issues[1]?.status).toBe('completed');
+	});
+
+	test('skips requirements check when --skip-requirements flag is set', async () => {
+		const issue1 = makeIssue(1);
+		const graph = makeGraph(makeNode(issue1));
+		const state = makeState();
+		let checkCalled = false;
+		const { deps } = makeDeps({
+			checkRequirements: async () => { checkCalled = true; return { ok: true, summary: '', criteria: [] }; },
+		});
+
+		await runMainLoop(makeOpts([1], graph, state, { skipRequirements: true }, deps));
+
+		expect(checkCalled).toBe(false);
+		expect(state.issues[1]?.status).toBe('completed');
+	});
+
+	test('invokes requirements fixer on failure before retry', async () => {
+		const issue1 = makeIssue(1, 'Add feature', '- [ ] Build it');
+		const graph = makeGraph(makeNode(issue1));
+		const state = makeState();
+		const config: OrchestratorConfig = { ...baseConfig, retries: { implement: 0, verify: 0, requirements: 1 } };
+		let checkCount = 0;
+		let fixerCalled = false;
+		const { deps } = makeDeps({
+			checkRequirements: async () => {
+				checkCount++;
+				if (checkCount === 1) return { ok: false, summary: 'Missing login page', criteria: [] };
+				return { ok: true, summary: 'All good', criteria: [] };
+			},
+			fixRequirements: async () => { fixerCalled = true; },
+		});
+
+		await runMainLoop({ ...makeOpts([1], graph, state, {}, deps), config });
+
+		expect(fixerCalled).toBe(true);
+		expect(state.issues[1]?.status).toBe('completed');
+	});
+});
+
+// ---------------------------------------------------------------------------
+// runMainLoop — split parent auto-close
+// ---------------------------------------------------------------------------
+
+describe('runMainLoop — split parent auto-close', () => {
+	test('closes split parent when last sub-issue completes', async () => {
+		const issue10 = makeIssue(10, 'Sub A');
+		const graph = makeGraph(makeNode(issue10));
+		const state = makeState();
+		getIssueState(state, 1, 'Parent').status = 'split';
+		state.issues[1].subIssues = [10];
+
+		let closedIssue: number | null = null;
+		const { deps } = makeDeps({
+			closeGitHubIssue: async (num) => { closedIssue = num; },
+		});
+
+		await runMainLoop(makeOpts([10], graph, state, {}, deps));
+
+		expect(state.issues[1]?.status).toBe('completed');
+		expect(closedIssue as number | null).toBe(1);
 	});
 });
 

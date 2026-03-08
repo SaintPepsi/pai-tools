@@ -10,6 +10,7 @@ import {
 	unlinkSync,
 	existsSync,
 	mkdirSync,
+	mkdtempSync,
 	copyFileSync,
 	rmSync,
 } from 'node:fs';
@@ -21,6 +22,7 @@ export interface FsAdapter {
 	unlinkFile: (path: string) => void;
 	fileExists: (path: string) => boolean;
 	mkdirp: (path: string) => void;
+	mkdtemp: (prefix: string) => string;
 	copyFile: (src: string, dest: string) => void;
 	rmrf: (path: string) => void;
 	parseJson: (content: string) => unknown | null;
@@ -33,6 +35,7 @@ export const defaultFsAdapter: FsAdapter = {
 	unlinkFile: (p) => unlinkSync(p),
 	fileExists: (p) => existsSync(p),
 	mkdirp: (p) => mkdirSync(p, { recursive: true }),
+	mkdtemp: (prefix) => mkdtempSync(prefix),
 	copyFile: (src, dest) => copyFileSync(src, dest),
 	rmrf: (p) => rmSync(p, { recursive: true, force: true }),
 	parseJson: (content) => { try { return JSON.parse(content); } catch { return null; } },

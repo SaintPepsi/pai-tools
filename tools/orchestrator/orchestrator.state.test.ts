@@ -1,23 +1,23 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { defaultFsAdapter } from '@shared/adapters/fs.ts';
 import { loadState, saveState } from '@shared/state.ts';
 // initState and getIssueState are defined in index.ts directly (not a sub-module),
 // so we import from there — consistent with orchestrator.parsing.test.ts which also
 // imports parseFlags from ./index.ts.
-import { initState, getIssueState } from '@tools/orchestrator/state-helpers.ts';
+import { initState, getIssueState, checkSplitParentCompletion } from '@tools/orchestrator/state-helpers.ts';
 import type { OrchestratorState } from '@tools/orchestrator/types.ts';
 
 describe('state management', () => {
 	let tempDir: string;
 
 	beforeEach(() => {
-		tempDir = mkdtempSync(join(tmpdir(), 'pai-state-test-'));
+		tempDir = defaultFsAdapter.mkdtemp(join(tmpdir(), 'pai-state-test-'));
 	});
 
 	afterEach(() => {
-		rmSync(tempDir, { recursive: true, force: true });
+		defaultFsAdapter.rmrf(tempDir);
 	});
 
 	test('initState returns valid empty state', () => {
@@ -122,5 +122,42 @@ describe('state management', () => {
 
 		expect(loaded!.issues[50].status).toBe('completed');
 		expect(loaded!.issues[50].error).toBe('leftover error from failed attempt');
+	});
+});
+
+describe('checkSplitParentCompletion', () => {
+	test('marks parent completed when all sub-issues are completed', () => {
+		const state = initState();
+		getIssueState(state, 1, 'Parent').status = 'split';
+		state.issues[1].subIssues = [10, 11];
+		getIssueState(state, 10, 'Sub A').status = 'completed';
+		getIssueState(state, 11, 'Sub B').status = 'completed';
+
+		const result = checkSplitParentCompletion(state, 11);
+
+		expect(result).toEqual({ parentNumber: 1, allComplete: true });
+		expect(state.issues[1].status).toBe('completed');
+		expect(state.issues[1].completedAt).toBeTruthy();
+	});
+
+	test('does not mark parent when some sub-issues are incomplete', () => {
+		const state = initState();
+		getIssueState(state, 1, 'Parent').status = 'split';
+		state.issues[1].subIssues = [10, 11];
+		getIssueState(state, 10, 'Sub A').status = 'completed';
+		getIssueState(state, 11, 'Sub B').status = 'in_progress';
+
+		const result = checkSplitParentCompletion(state, 10);
+
+		expect(result).toEqual({ parentNumber: 1, allComplete: false });
+		expect(state.issues[1].status).toBe('split');
+	});
+
+	test('returns null when completed issue has no split parent', () => {
+		const state = initState();
+		getIssueState(state, 5, 'Standalone').status = 'completed';
+
+		const result = checkSplitParentCompletion(state, 5);
+		expect(result).toBeNull();
 	});
 });

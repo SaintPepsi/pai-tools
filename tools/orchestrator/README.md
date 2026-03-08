@@ -15,6 +15,7 @@ pait orchestrate --reset            # Clear state and start fresh
 pait orchestrate --skip-e2e         # Skip E2E verification step
 pait orchestrate --skip-split       # Skip issue splitting assessment
 pait orchestrate --no-verify        # Skip verification requirement
+pait orchestrate --skip-requirements # Skip LLM requirements verification
 pait orchestrate --parallel 3       # Run up to 3 issues concurrently
 pait orchestrate --file PLAN.md     # Read tasks from markdown checklist
 ```
@@ -49,6 +50,7 @@ All fields are optional. Defaults:
 | `models.assess` | `haiku` |
 | `retries.implement` | `1` |
 | `retries.verify` | `1` |
+| `retries.requirements` | `1` |
 | `allowedTools` | `Bash Edit Write Read Glob Grep` |
 | `verify` | `[]` (prompts on first run) |
 | `e2e` | not set (E2E step skipped) |

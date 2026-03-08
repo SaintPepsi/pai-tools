@@ -16,7 +16,7 @@ import {
 	type ProcessOneIssueConfig,
 	type RunParallelLoopOptions,
 } from '@tools/orchestrator/parallel.ts';
-import { getIssueState } from '@tools/orchestrator/state-helpers.ts';
+import { getIssueState, checkSplitParentCompletion } from '@tools/orchestrator/state-helpers.ts';
 import { withRetries } from '@tools/orchestrator/retry.ts';
 import type { GitHubIssue } from '@shared/github.ts';
 import type {
@@ -54,14 +54,14 @@ const baseConfig: OrchestratorConfig = {
 	baseBranch: 'main',
 	worktreeDir: '.pait/worktrees',
 	models: { implement: 'claude-sonnet', assess: 'claude-haiku' },
-	retries: { implement: 0, verify: 0 },
+	retries: { implement: 0, verify: 0, requirements: 0 },
 	allowedTools: 'Bash Edit Write Read',
 	verify: [{ name: 'test', cmd: 'bun test' }],
 };
 
 const baseFlags: OrchestratorFlags = {
 	dryRun: false, reset: false, statusOnly: false, skipE2e: true,
-	skipSplit: true, noVerify: false, singleMode: false,
+	skipSplit: true, skipRequirements: false, noVerify: false, singleMode: false,
 	singleIssue: null, fromIssue: null, parallel: 2, file: null,
 };
 
@@ -103,14 +103,19 @@ function makeDeps(overrides: Partial<ParallelDeps> = {}): { deps: ParallelDeps; 
 		printStatus: () => {},
 		saveState: (...args) => { track('saveState', ...args); },
 		getIssueState,
+		checkSplitParentCompletion,
 		withRetries,
 		createWorktree: async (...args) => { track('createWorktree', ...args); return { ok: true, worktreePath: '/wt', baseBranch: 'main' }; },
 		removeWorktree: async (...args) => { track('removeWorktree', ...args); },
 		createPR: async (...args) => { track('createPR', ...args); return { ok: true, prNumber: 42 }; },
+		closeGitHubIssue: async (...args) => { track('closeGitHubIssue', ...args); },
 		implementIssue: async (...args) => { track('implementIssue', ...args); return { ok: true }; },
 		fixVerificationFailure: async (...args) => { track('fixVerificationFailure', ...args); },
 		runVerify: async (...args) => { track('runVerify', ...args); return { ok: true, steps: [] }; },
 		buildPRBody: () => 'PR body',
+		checkForChanges: async () => ({ hasChanges: true }),
+		checkRequirements: async () => ({ ok: true, summary: 'All good', criteria: [] }),
+		fixRequirements: async () => {},
 		...overrides,
 	};
 	return { deps, calls };
@@ -357,7 +362,7 @@ describe('processOneIssue — verification failure', () => {
 		const state = makeState();
 		let fixCalled = false;
 		// retries: verify = 1 means 2 total attempts → fixer is called once
-		const config: OrchestratorConfig = { ...baseConfig, retries: { implement: 0, verify: 1 } };
+		const config: OrchestratorConfig = { ...baseConfig, retries: { implement: 0, verify: 1, requirements: 0 } };
 		const { deps } = makeDeps({
 			runVerify: async () => ({ ok: false, steps: [], failedStep: 'test', error: 'fail' }),
 			fixVerificationFailure: async () => { fixCalled = true; },
@@ -766,7 +771,7 @@ describe('processOneIssue — impl retry fixer callback', () => {
 		const node = makeNode(issue);
 		const state = makeState();
 		let callCount = 0;
-		const config: OrchestratorConfig = { ...baseConfig, retries: { implement: 1, verify: 0 } };
+		const config: OrchestratorConfig = { ...baseConfig, retries: { implement: 1, verify: 0, requirements: 0 } };
 		const { deps } = makeDeps({
 			implementIssue: async () => {
 				callCount++;
@@ -789,7 +794,7 @@ describe('processOneIssue — verify retry fixer callback', () => {
 		const state = makeState();
 		let fixCalled = false;
 		let verifyCount = 0;
-		const config: OrchestratorConfig = { ...baseConfig, retries: { implement: 0, verify: 1 } };
+		const config: OrchestratorConfig = { ...baseConfig, retries: { implement: 0, verify: 1, requirements: 0 } };
 		const { deps } = makeDeps({
 			runVerify: async () => {
 				verifyCount++;
@@ -811,7 +816,7 @@ describe('processOneIssue — verify retry fixer callback', () => {
 		const state = makeState();
 		let fixCalled = false;
 		let verifyCount = 0;
-		const config: OrchestratorConfig = { ...baseConfig, retries: { implement: 0, verify: 1 } };
+		const config: OrchestratorConfig = { ...baseConfig, retries: { implement: 0, verify: 1, requirements: 0 } };
 		const { deps } = makeDeps({
 			runVerify: async () => {
 				verifyCount++;
@@ -826,5 +831,202 @@ describe('processOneIssue — verify retry fixer callback', () => {
 
 		expect(fixCalled).toBe(false);
 		expect(state.issues[12]?.status).toBe('completed');
+	});
+});
+
+// ---------------------------------------------------------------------------
+// processOneIssue — zero-diff detection
+// ---------------------------------------------------------------------------
+
+describe('processOneIssue — zero-diff detection', () => {
+	test('fails issue when agent produces no changes', async () => {
+		const issue1 = makeIssue(1);
+		const node1 = makeNode(issue1);
+		const state = makeState();
+		const { deps } = makeDeps({
+			checkForChanges: async () => ({ hasChanges: false }),
+		});
+
+		await processOneIssue(
+			{ issueNum: 1, node: node1, state, repoRoot: '/repo', logger: noopLogger, safeUpdateState: async (fn) => fn(state), iLog: makeNoopIssueLog() },
+			{ config: baseConfig, flags: baseFlags, deps }
+		);
+
+		expect(state.issues[1]?.status).toBe('failed');
+		expect(state.issues[1]?.error).toContain('no changes');
+	});
+
+	test('removes worktree after zero-diff failure', async () => {
+		const issue1 = makeIssue(1);
+		const node1 = makeNode(issue1);
+		const state = makeState();
+		const { deps, calls } = makeDeps({
+			checkForChanges: async () => ({ hasChanges: false }),
+		});
+
+		await processOneIssue(
+			{ issueNum: 1, node: node1, state, repoRoot: '/repo', logger: noopLogger, safeUpdateState: async (fn) => fn(state), iLog: makeNoopIssueLog() },
+			{ config: baseConfig, flags: baseFlags, deps }
+		);
+
+		expect(calls.filter((c) => c.fn === 'removeWorktree').length).toBe(1);
+	});
+
+	test('does not run verification when zero-diff detected', async () => {
+		const issue1 = makeIssue(1);
+		const node1 = makeNode(issue1);
+		const state = makeState();
+		let verifyCalled = false;
+		const { deps } = makeDeps({
+			checkForChanges: async () => ({ hasChanges: false }),
+			runVerify: async () => { verifyCalled = true; return { ok: true, steps: [] }; },
+		});
+
+		await processOneIssue(
+			{ issueNum: 1, node: node1, state, repoRoot: '/repo', logger: noopLogger, safeUpdateState: async (fn) => fn(state), iLog: makeNoopIssueLog() },
+			{ config: baseConfig, flags: baseFlags, deps }
+		);
+
+		expect(verifyCalled).toBe(false);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// processOneIssue — requirements check
+// ---------------------------------------------------------------------------
+
+describe('processOneIssue — requirements check', () => {
+	test('fails issue when requirements not satisfied', async () => {
+		const issue1 = makeIssue(1);
+		const node1 = makeNode(issue1);
+		const state = makeState();
+		const { deps } = makeDeps({
+			checkRequirements: async () => ({ ok: false, summary: 'Incomplete', criteria: [] }),
+		});
+
+		await processOneIssue(
+			{ issueNum: 1, node: node1, state, repoRoot: '/repo', logger: noopLogger, safeUpdateState: async (fn) => fn(state), iLog: makeNoopIssueLog() },
+			{ config: baseConfig, flags: baseFlags, deps }
+		);
+
+		expect(state.issues[1]?.status).toBe('failed');
+		expect(state.issues[1]?.error).toContain('Requirements');
+	});
+
+	test('skips requirements check when skipRequirements flag set', async () => {
+		const issue1 = makeIssue(1);
+		const node1 = makeNode(issue1);
+		const state = makeState();
+		let checkCalled = false;
+		const { deps } = makeDeps({
+			checkRequirements: async () => { checkCalled = true; return { ok: true, summary: '', criteria: [] }; },
+		});
+
+		await processOneIssue(
+			{ issueNum: 1, node: node1, state, repoRoot: '/repo', logger: noopLogger, safeUpdateState: async (fn) => fn(state), iLog: makeNoopIssueLog() },
+			{ config: baseConfig, flags: { ...baseFlags, skipRequirements: true }, deps }
+		);
+
+		expect(checkCalled).toBe(false);
+		expect(state.issues[1]?.status).toBe('completed');
+	});
+
+	test('removes worktree after requirements failure', async () => {
+		const issue1 = makeIssue(1);
+		const node1 = makeNode(issue1);
+		const state = makeState();
+		const { deps, calls } = makeDeps({
+			checkRequirements: async () => ({ ok: false, summary: 'Missing tests', criteria: [] }),
+		});
+
+		await processOneIssue(
+			{ issueNum: 1, node: node1, state, repoRoot: '/repo', logger: noopLogger, safeUpdateState: async (fn) => fn(state), iLog: makeNoopIssueLog() },
+			{ config: baseConfig, flags: baseFlags, deps }
+		);
+
+		expect(calls.filter((c) => c.fn === 'removeWorktree').length).toBe(1);
+	});
+
+	test('calls fixRequirements on retry when requirements fail', async () => {
+		const issue1 = makeIssue(1);
+		const node1 = makeNode(issue1);
+		const state = makeState();
+		let fixCalled = false;
+		let reqCount = 0;
+		const config: OrchestratorConfig = { ...baseConfig, retries: { implement: 0, verify: 0, requirements: 1 } };
+		const { deps } = makeDeps({
+			checkRequirements: async () => {
+				reqCount++;
+				if (reqCount === 1) return { ok: false, summary: 'Missing', criteria: [{ criterion: 'tests', met: false, evidence: 'none' }] };
+				return { ok: true, summary: 'All good', criteria: [] };
+			},
+			fixRequirements: async () => { fixCalled = true; },
+		});
+
+		await processOneIssue(
+			{ issueNum: 1, node: node1, state, repoRoot: '/repo', logger: noopLogger, safeUpdateState: async (fn) => fn(state), iLog: makeNoopIssueLog() },
+			{ config, flags: baseFlags, deps }
+		);
+
+		expect(fixCalled).toBe(true);
+		expect(state.issues[1]?.status).toBe('completed');
+	});
+});
+
+// ---------------------------------------------------------------------------
+// processOneIssue — split parent auto-close
+// ---------------------------------------------------------------------------
+
+describe('processOneIssue — split parent auto-close', () => {
+	test('closes parent issue when all sub-issues complete', async () => {
+		const issue2 = makeIssue(2);
+		const node2 = makeNode(issue2);
+		const state = makeState();
+		// Set up parent issue #10 split into [2, 3], with #3 already completed
+		getIssueState(state, 10, 'Parent issue');
+		state.issues[10].status = 'split';
+		state.issues[10].subIssues = [2, 3];
+		getIssueState(state, 3, 'Sub-issue 3');
+		state.issues[3].status = 'completed';
+
+		let closedIssue: number | undefined;
+		const { deps } = makeDeps({
+			closeGitHubIssue: async (n) => { closedIssue = n; },
+		});
+
+		await processOneIssue(
+			{ issueNum: 2, node: node2, state, repoRoot: '/repo', logger: noopLogger, safeUpdateState: async (fn) => fn(state), iLog: makeNoopIssueLog() },
+			{ config: baseConfig, flags: baseFlags, deps }
+		);
+
+		expect(state.issues[2]?.status).toBe('completed');
+		expect(closedIssue).toBe(10);
+		expect(state.issues[10]?.status as string).toBe('completed');
+	});
+
+	test('does not close parent when other sub-issues still pending', async () => {
+		const issue2 = makeIssue(2);
+		const node2 = makeNode(issue2);
+		const state = makeState();
+		// Set up parent issue #10 split into [2, 3], with #3 still pending
+		getIssueState(state, 10, 'Parent issue');
+		state.issues[10].status = 'split';
+		state.issues[10].subIssues = [2, 3];
+		getIssueState(state, 3, 'Sub-issue 3');
+		state.issues[3].status = 'pending';
+
+		let closedIssue: number | undefined;
+		const { deps } = makeDeps({
+			closeGitHubIssue: async (n) => { closedIssue = n; },
+		});
+
+		await processOneIssue(
+			{ issueNum: 2, node: node2, state, repoRoot: '/repo', logger: noopLogger, safeUpdateState: async (fn) => fn(state), iLog: makeNoopIssueLog() },
+			{ config: baseConfig, flags: baseFlags, deps }
+		);
+
+		expect(state.issues[2]?.status).toBe('completed');
+		expect(closedIssue).toBeUndefined();
+		expect(state.issues[10]?.status).toBe('split');
 	});
 });

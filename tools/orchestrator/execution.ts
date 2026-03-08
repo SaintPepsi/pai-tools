@@ -5,7 +5,8 @@
  * Extracted from index.ts to keep the entry point focused on config and routing.
  */
 
-import { log } from '@shared/log.ts';
+import { log, RollingWindow } from '@shared/log.ts';
+import { runClaude } from '@shared/claude.ts';
 import { saveState } from '@shared/state.ts';
 import { createWorktree, removeWorktree } from '@shared/git.ts';
 import { fetchOpenIssues, createSubIssues, createPR } from '@shared/github.ts';
@@ -15,6 +16,8 @@ import { assessIssueSize, implementIssue, fixVerificationFailure } from '@tools/
 import { printExecutionPlan, printStatus } from '@tools/orchestrator/display.ts';
 import { getIssueState } from '@tools/orchestrator/state-helpers.ts';
 import { withRetries } from '@tools/orchestrator/retry.ts';
+import { checkRequirements as _checkRequirements } from '@tools/orchestrator/requirements-check.ts';
+import type { RequirementsCheckResult } from '@tools/orchestrator/requirements-check.ts';
 import type { GitHubIssue } from '@shared/github.ts';
 import type {
 	DependencyNode,
@@ -45,6 +48,14 @@ export interface ExecutionAgentDeps {
 	fixVerificationFailure: typeof fixVerificationFailure;
 	runVerify: typeof runVerify;
 	checkForChanges: (worktreePath: string, baseBranch: string) => Promise<{ hasChanges: boolean }>;
+	checkRequirements: (opts: {
+		issue: GitHubIssue; baseBranch: string; worktreePath: string;
+		config: OrchestratorConfig; logger: RunLogger;
+	}) => Promise<RequirementsCheckResult>;
+	fixRequirements: (opts: {
+		issue: GitHubIssue; summary: string; criteria: RequirementsCheckResult['criteria'];
+		config: OrchestratorConfig; worktreePath: string; logger: RunLogger;
+	}) => Promise<void>;
 }
 
 export interface ExecutionStateDeps {
@@ -101,6 +112,34 @@ export const defaultExecutionDeps: ExecutionDeps = {
 		const proc = Bun.spawnSync(['git', '-C', worktreePath, 'diff', '--stat', baseBranch]);
 		const output = proc.stdout?.toString().trim() ?? '';
 		return { hasChanges: output.length > 0 };
+	},
+	checkRequirements: async (opts) => _checkRequirements(opts),
+	fixRequirements: async (opts) => {
+		const { issue, summary, criteria, config, worktreePath, logger } = opts;
+		const unmetList = criteria
+			.filter(c => !c.met)
+			.map(c => `- ${c.criterion}: ${c.evidence}`)
+			.join('\n');
+
+		const prompt = `The requirements check for issue #${issue.number} found unmet criteria.
+
+Assessment: ${summary}
+
+Unmet requirements:
+${unmetList}
+
+Please implement the missing requirements and commit your changes referencing #${issue.number}.`;
+
+		const window = new RollingWindow({ header: `Agent fixing requirements for #${issue.number}`, logPath: logger.path });
+		await runClaude({
+			prompt,
+			model: config.models.implement,
+			cwd: worktreePath,
+			permissionMode: 'acceptEdits',
+			allowedTools: config.allowedTools,
+			onChunk: (chunk) => window.update(chunk),
+		}).catch(() => ({ ok: false, output: '' }));
+		window.clear();
 	},
 	saveState,
 	getIssueState,
@@ -379,6 +418,49 @@ export async function runMainLoop(opts: RunMainLoopOptions): Promise<void> {
 		}
 
 		d.log.ok('All verification gates passed');
+
+		// Requirements check (LLM gate) — skip if flag set
+		if (!flags.skipRequirements) {
+			d.log.info('Running requirements verification...');
+			let lastReqResult: RequirementsCheckResult | undefined;
+			const reqRetryResult = await d.withRetries(
+				async () => {
+					const r = await d.checkRequirements({
+						issue: node.issue, baseBranch, worktreePath, config, logger,
+					});
+					lastReqResult = r;
+					return r;
+				},
+				async (attempt) => {
+					if (lastReqResult && !lastReqResult.ok) {
+						d.log.warn(
+							`Requirements retry ${attempt + 1}/${config.retries.requirements} — feeding assessment back to agent`
+						);
+						await d.fixRequirements({
+							issue: node.issue,
+							summary: lastReqResult.summary,
+							criteria: lastReqResult.criteria,
+							config,
+							worktreePath,
+							logger,
+						});
+					}
+				},
+				config.retries.requirements + 1,
+			);
+
+			if (!reqRetryResult.ok) {
+				const summary = lastReqResult?.summary ?? 'unknown';
+				issueState.status = 'failed';
+				issueState.error = `Requirements check failed after ${config.retries.requirements + 1} attempts: ${summary}`;
+				d.saveState(state, stateFile);
+				logger.issueFailed(issueNum, issueState.error);
+				await d.removeWorktree(worktreePath, node.branch, repoRoot, logger, issueNum);
+				d.log.error('HALTING — requirements not satisfied');
+				d.exit(1);
+			}
+			d.log.ok('Requirements verification passed');
+		}
 
 		// Create PR (push from worktree)
 		d.log.info('Creating pull request...');

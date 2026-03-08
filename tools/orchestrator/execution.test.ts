@@ -115,6 +115,8 @@ function makeDeps(overrides: Partial<ExecutionDeps> = {}): { deps: ExecutionDeps
 		fixVerificationFailure: async () => {},
 		runVerify: async () => { track('runVerify'); return { ok: true, steps: [] }; },
 		checkForChanges: async () => ({ hasChanges: true }),
+		checkRequirements: async () => ({ ok: true, summary: 'All good', criteria: [] }),
+		fixRequirements: async () => {},
 		...overrides,
 	};
 	return { deps, calls };
@@ -792,6 +794,79 @@ describe('runMainLoop — zero-diff detection', () => {
 		await runMainLoop(makeOpts([1], graph, state, {}, deps));
 
 		expect(calls.some(c => c.fn === 'runVerify')).toBe(true);
+		expect(state.issues[1]?.status).toBe('completed');
+	});
+});
+
+// ---------------------------------------------------------------------------
+// runMainLoop — requirements check
+// ---------------------------------------------------------------------------
+
+describe('runMainLoop — requirements check', () => {
+	test('fails issue when requirements check says not satisfied', async () => {
+		const issue1 = makeIssue(1, 'Add feature', '- [ ] Build the thing');
+		const graph = makeGraph(makeNode(issue1));
+		const state = makeState();
+		const config: OrchestratorConfig = { ...baseConfig, retries: { implement: 0, verify: 0, requirements: 0 } };
+		const { deps } = makeDeps({
+			checkRequirements: async () => ({ ok: false, summary: 'Incomplete', criteria: [] }),
+		});
+
+		await expect(
+			runMainLoop({ ...makeOpts([1], graph, state, {}, deps), config })
+		).rejects.toThrow('exit(1)');
+		expect(state.issues[1]?.status).toBe('failed');
+		expect(state.issues[1]?.error).toContain('Requirements');
+	});
+
+	test('proceeds to PR when requirements check passes', async () => {
+		const issue1 = makeIssue(1, 'Add feature', '- [ ] Build it');
+		const graph = makeGraph(makeNode(issue1));
+		const state = makeState();
+		const { deps, calls } = makeDeps({
+			checkRequirements: async () => ({ ok: true, summary: 'All good', criteria: [] }),
+		});
+
+		await runMainLoop(makeOpts([1], graph, state, {}, deps));
+
+		expect(calls.some(c => c.fn === 'createPR')).toBe(true);
+		expect(state.issues[1]?.status).toBe('completed');
+	});
+
+	test('skips requirements check when --skip-requirements flag is set', async () => {
+		const issue1 = makeIssue(1);
+		const graph = makeGraph(makeNode(issue1));
+		const state = makeState();
+		let checkCalled = false;
+		const { deps } = makeDeps({
+			checkRequirements: async () => { checkCalled = true; return { ok: true, summary: '', criteria: [] }; },
+		});
+
+		await runMainLoop(makeOpts([1], graph, state, { skipRequirements: true }, deps));
+
+		expect(checkCalled).toBe(false);
+		expect(state.issues[1]?.status).toBe('completed');
+	});
+
+	test('invokes requirements fixer on failure before retry', async () => {
+		const issue1 = makeIssue(1, 'Add feature', '- [ ] Build it');
+		const graph = makeGraph(makeNode(issue1));
+		const state = makeState();
+		const config: OrchestratorConfig = { ...baseConfig, retries: { implement: 0, verify: 0, requirements: 1 } };
+		let checkCount = 0;
+		let fixerCalled = false;
+		const { deps } = makeDeps({
+			checkRequirements: async () => {
+				checkCount++;
+				if (checkCount === 1) return { ok: false, summary: 'Missing login page', criteria: [] };
+				return { ok: true, summary: 'All good', criteria: [] };
+			},
+			fixRequirements: async () => { fixerCalled = true; },
+		});
+
+		await runMainLoop({ ...makeOpts([1], graph, state, {}, deps), config });
+
+		expect(fixerCalled).toBe(true);
 		expect(state.issues[1]?.status).toBe('completed');
 	});
 });

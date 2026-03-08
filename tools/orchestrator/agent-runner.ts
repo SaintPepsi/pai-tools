@@ -125,7 +125,11 @@ ${issue.body}
 7. Ensure all verification commands pass before finishing:
 ${verifyList}
 
-Do NOT create a pull request. Just implement, test, and commit.`;
+Do NOT create a pull request. Just implement, test, and commit.
+
+CRITICAL: You MUST write code and make commits. Do not ask clarifying questions.
+Do not propose designs or alternatives. Do not output analysis without implementation.
+If requirements are ambiguous, make reasonable assumptions and implement.`;
 }
 
 export async function fixVerificationFailure(

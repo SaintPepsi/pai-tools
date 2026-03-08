@@ -114,6 +114,14 @@ describe('buildImplementationPrompt', () => {
 		expect(prompt).toContain('CLAUDE.md');
 	});
 
+	test('buildImplementationPrompt includes anti-design enforcement', () => {
+		const issue = makeIssue(1, 'Add auth', 'Build login page');
+		const prompt = buildImplementationPrompt(issue, 'feat/1-auth', 'main', minimalConfig, '/repo');
+		expect(prompt).toContain('MUST write code and make commits');
+		expect(prompt).toContain('Do not ask clarifying questions');
+		expect(prompt).toContain('Do not propose designs');
+	});
+
 	test('returns a string', () => {
 		const issue = makeIssue(1, 'Test', 'body');
 		const result = buildImplementationPrompt(issue, 'feat/1-test', 'main', minimalConfig, '/repo');

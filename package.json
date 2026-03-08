@@ -1,6 +1,6 @@
 {
   "name": "pai-tools",
-  "version": "0.2.22",
+  "version": "0.2.23",
   "description": "PAI Issue Orchestrator — automated issue implementation with verification",
   "type": "module",
   "bin": {

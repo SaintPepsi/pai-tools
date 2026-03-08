@@ -46,6 +46,7 @@ function makeFs(overrides: Partial<FsAdapter> = {}): FsAdapter {
 		mkdirp: () => {},
 		copyFile: () => {},
 		rmrf: () => {},
+		mkdtemp: (prefix) => `${prefix}test`,
 		parseJson: () => null,
 		...overrides,
 	};

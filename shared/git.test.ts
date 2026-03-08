@@ -49,7 +49,7 @@ function makeConflictMockDeps(claudeOutput: string = 'resolved content\n'): {
 		clear: () => { window.clearCount++; },
 	} as unknown as RollingWindow;
 
-	const { readFileSync, writeFileSync, existsSync, rmSync } = require('node:fs');
+	const { readFileSync, writeFileSync, existsSync, rmSync, mkdtempSync } = require('node:fs');
 
 	const deps: GitDeps = {
 		exec: async (cmd, opts) => {
@@ -69,6 +69,7 @@ function makeConflictMockDeps(claudeOutput: string = 'resolved content\n'): {
 			mkdirp: () => {},
 			copyFile: () => {},
 			rmrf: (p: string) => rmSync(p, { recursive: true, force: true }),
+			mkdtemp: (prefix: string) => mkdtempSync(prefix),
 			parseJson: (s: string) => { try { return JSON.parse(s); } catch { return null; } },
 		},
 		env: Bun.env as Record<string, string | undefined>,

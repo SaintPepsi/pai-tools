@@ -893,7 +893,7 @@ describe('runMainLoop — split parent auto-close', () => {
 		await runMainLoop(makeOpts([10], graph, state, {}, deps));
 
 		expect(state.issues[1]?.status).toBe('completed');
-		expect(closedIssue).toBe(1);
+		expect(closedIssue as number | null).toBe(1);
 	});
 });
 

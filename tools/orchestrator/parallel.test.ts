@@ -1001,7 +1001,7 @@ describe('processOneIssue — split parent auto-close', () => {
 
 		expect(state.issues[2]?.status).toBe('completed');
 		expect(closedIssue).toBe(10);
-		expect(state.issues[10]?.status).toBe('completed');
+		expect(state.issues[10]?.status as string).toBe('completed');
 	});
 
 	test('does not close parent when other sub-issues still pending', async () => {

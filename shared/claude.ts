@@ -11,30 +11,47 @@ export interface RunClaudeOpts {
 	onChunk?: (chunk: string) => void;
 }
 
-export interface RunClaudeDeps {
-	spawn: typeof Bun.spawn;
+export interface ClaudeProcess {
+	stdout: ReadableStream<Uint8Array> | null;
+	exited: Promise<number>;
+}
+
+export interface ClaudeDeps {
+	spawn: (cmd: string[], opts: {
+		cwd: string;
+		stdin: Blob;
+		stdout: 'pipe';
+		stderr: 'pipe';
+		env: Record<string, string>;
+	}) => ClaudeProcess;
 	env: Record<string, string | undefined>;
 }
 
-const defaultDeps: RunClaudeDeps = {
-	spawn: Bun.spawn,
-	env: process.env,
+export const defaultDeps: ClaudeDeps = {
+	spawn: (cmd, opts) => Bun.spawn(cmd, opts) as ClaudeProcess,
+	env: process.env as Record<string, string | undefined>,
 };
 
 export async function runClaude(
 	opts: RunClaudeOpts,
-	deps: RunClaudeDeps = defaultDeps,
+	deps: ClaudeDeps = defaultDeps
 ): Promise<{ ok: boolean; output: string }> {
 	const args = ['-p', '--model', opts.model];
 	if (opts.permissionMode) args.push('--permission-mode', opts.permissionMode);
 	if (opts.allowedTools) args.push('--allowedTools', opts.allowedTools);
+
+	const env: Record<string, string> = {};
+	for (const [k, v] of Object.entries(deps.env)) {
+		if (v !== undefined) env[k] = v;
+	}
+	env['CLAUDECODE'] = '';
 
 	const proc = deps.spawn(['claude', ...args], {
 		cwd: opts.cwd,
 		stdin: new Blob([opts.prompt]),
 		stdout: 'pipe',
 		stderr: 'pipe',
-		env: { ...deps.env, CLAUDECODE: '' },
+		env,
 	});
 
 	const decoder = new TextDecoder();

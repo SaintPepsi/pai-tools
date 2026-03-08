@@ -1,41 +1,40 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { $ } from 'bun';
-import { rebaseBranch, detectConflicts } from './index.ts';
+import { defaultFsAdapter } from '@shared/adapters/fs.ts';
+import { rebaseBranch, detectConflicts } from '@shared/git.ts';
 
 describe('git operations', () => {
 	let tempDir: string;
 	let repoRoot: string;
 
 	beforeEach(async () => {
-		tempDir = mkdtempSync(join(tmpdir(), 'pai-finalize-git-'));
+		tempDir = (await $`mktemp -d`.text()).trim();
 		repoRoot = join(tempDir, 'repo');
-		mkdirSync(repoRoot);
+		defaultFsAdapter.mkdirp(repoRoot);
 
 		// Initialize a real git repo with an initial commit
 		await $`git -C ${repoRoot} init`.quiet();
 		await $`git -C ${repoRoot} checkout -b main`.quiet();
-		writeFileSync(join(repoRoot, 'README.md'), 'initial\n');
+		defaultFsAdapter.writeFile(join(repoRoot, 'README.md'), 'initial\n');
 		await $`git -C ${repoRoot} add README.md`.quiet();
 		await $`git -C ${repoRoot} commit -m "initial"`.quiet();
 	});
 
 	afterEach(() => {
-		rmSync(tempDir, { recursive: true, force: true });
+		defaultFsAdapter.rmrf(tempDir);
 	});
 
 	test('rebaseBranch: clean rebase succeeds', async () => {
 		// Create a feature branch with a commit
 		await $`git -C ${repoRoot} checkout -b feat/1-test`.quiet();
-		writeFileSync(join(repoRoot, 'feature.txt'), 'feature\n');
+		defaultFsAdapter.writeFile(join(repoRoot, 'feature.txt'), 'feature\n');
 		await $`git -C ${repoRoot} add feature.txt`.quiet();
 		await $`git -C ${repoRoot} commit -m "add feature"`.quiet();
 
 		// Add a non-conflicting commit to main
 		await $`git -C ${repoRoot} checkout main`.quiet();
-		writeFileSync(join(repoRoot, 'other.txt'), 'other\n');
+		defaultFsAdapter.writeFile(join(repoRoot, 'other.txt'), 'other\n');
 		await $`git -C ${repoRoot} add other.txt`.quiet();
 		await $`git -C ${repoRoot} commit -m "add other"`.quiet();
 
@@ -53,13 +52,13 @@ describe('git operations', () => {
 	test('rebaseBranch: conflict detected', async () => {
 		// Create a feature branch that modifies README
 		await $`git -C ${repoRoot} checkout -b feat/2-conflict`.quiet();
-		writeFileSync(join(repoRoot, 'README.md'), 'feature version\n');
+		defaultFsAdapter.writeFile(join(repoRoot, 'README.md'), 'feature version\n');
 		await $`git -C ${repoRoot} add README.md`.quiet();
 		await $`git -C ${repoRoot} commit -m "feature change"`.quiet();
 
 		// Add a conflicting commit to main
 		await $`git -C ${repoRoot} checkout main`.quiet();
-		writeFileSync(join(repoRoot, 'README.md'), 'main version\n');
+		defaultFsAdapter.writeFile(join(repoRoot, 'README.md'), 'main version\n');
 		await $`git -C ${repoRoot} add README.md`.quiet();
 		await $`git -C ${repoRoot} commit -m "main change"`.quiet();
 
@@ -74,7 +73,7 @@ describe('git operations', () => {
 	test('rebaseBranch: no-op when branch already up-to-date', async () => {
 		// Feature branch created from current main tip — no divergence
 		await $`git -C ${repoRoot} checkout -b feat/3-uptodate`.quiet();
-		writeFileSync(join(repoRoot, 'feature.txt'), 'feature\n');
+		defaultFsAdapter.writeFile(join(repoRoot, 'feature.txt'), 'feature\n');
 		await $`git -C ${repoRoot} add feature.txt`.quiet();
 		await $`git -C ${repoRoot} commit -m "add feature"`.quiet();
 

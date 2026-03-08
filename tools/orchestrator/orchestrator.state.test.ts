@@ -2,12 +2,12 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { loadState, saveState } from '../../shared/state.ts';
+import { loadState, saveState } from '@shared/state.ts';
 // initState and getIssueState are defined in index.ts directly (not a sub-module),
 // so we import from there — consistent with orchestrator.parsing.test.ts which also
 // imports parseFlags from ./index.ts.
-import { initState, getIssueState } from './index.ts';
-import type { OrchestratorState } from './types.ts';
+import { initState, getIssueState } from '@tools/orchestrator/state-helpers.ts';
+import type { OrchestratorState } from '@tools/orchestrator/types.ts';
 
 describe('state management', () => {
 	let tempDir: string;

@@ -5,7 +5,8 @@
  * Parses issue dependencies, builds directed graphs, and topologically sorts them.
  */
 
-import type { GitHubIssue, DependencyNode, OrchestratorConfig } from './types.ts';
+import type { GitHubIssue } from '@shared/github.ts';
+import type { DependencyNode, OrchestratorConfig } from '@tools/orchestrator/types.ts';
 
 export function parseDependencies(body: string): number[] {
 	const depLine = body.split('\n').find((line) => /depends\s+on/i.test(line));

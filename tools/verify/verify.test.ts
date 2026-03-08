@@ -3,9 +3,9 @@ import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { $ } from 'bun';
-import { runVerify } from './runner.ts';
-import { parseVerifyFlags } from './index.ts';
-import type { VerifyCommand, VerifyOptions } from './types.ts';
+import { runVerify } from '@tools/verify/runner.ts';
+import { parseVerifyFlags } from '@tools/verify/index.ts';
+import type { VerifyCommand, VerifyOptions } from '@tools/verify/types.ts';
 
 describe('parseVerifyFlags', () => {
 	test('parses --skip-e2e', () => {

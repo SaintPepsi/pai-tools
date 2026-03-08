@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test';
-import { parseFlags } from './index.ts';
-import { parseDependencies, toKebabSlug } from './dependency-graph.ts';
+import { parseFlags } from '@tools/orchestrator/index.ts';
+import { parseDependencies, toKebabSlug } from '@tools/orchestrator/dependency-graph.ts';
 
 // ---------------------------------------------------------------------------
 // parseFlags

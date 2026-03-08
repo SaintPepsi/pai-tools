@@ -17,11 +17,12 @@
  *   --no-verify      Skip verification requirement
  */
 
-import { orchestrate, parseFlags } from './tools/orchestrator/index.ts';
-import { analyze, parseAnalyzeFlags } from './tools/analyze/index.ts';
-import { verify, parseVerifyFlags } from './tools/verify/index.ts';
-import { finalize, parseFinalizeFlags } from './tools/finalize/index.ts';
-import { setup } from './tools/setup.ts';
+import { orchestrate, parseFlags } from '@tools/orchestrator/index.ts';
+import { verify, parseVerifyFlags } from '@tools/verify/index.ts';
+import { finalize, parseFinalizeFlags } from '@tools/finalize/index.ts';
+import { deps, parseDepsFlags } from '@tools/deps/index.ts';
+import { setup } from '@tools/setup.ts';
+import { writeExample } from '@tools/orchestrator/example.ts';
 import { $ } from 'bun';
 import { join } from 'node:path';
 
@@ -37,25 +38,13 @@ const HELP = `\x1b[36mpait\x1b[0m — PAI Tools CLI
 
 \x1b[1mCOMMANDS\x1b[0m
   orchestrate    Run the issue orchestrator
-  analyze        Analyze file structure, suggest splits (AI-powered)
   verify         Run verification commands
   finalize       Merge orchestrated PRs
+  deps           Manage GitHub issue dependency relationships
   update         Pull latest pai-tools from remote
   version        Show current version
   setup          Register pait globally and configure PATH
   help           Show this help message
-
-\x1b[1mANALYZE FLAGS\x1b[0m
-  <path>           Target directory or file (default: .)
-  --threshold <N>  Soft line threshold (default: auto per language)
-  --tier1-only     Skip AI analysis, heuristics only
-  --issues         Create GitHub issues for recommendations
-  --dry-run        Show what issues would be created
-  --format <type>  Output: terminal (default) | json
-  --budget <N>     Max AI analysis calls (default: 50)
-  --include <glob> Additional glob patterns to include
-  --quiet, -q     Show only flagged files (default: show all)
-  --verbose        Show detailed analysis output
 
 \x1b[1mORCHESTRATOR FLAGS\x1b[0m
   --dry-run        Show execution plan without acting
@@ -67,6 +56,8 @@ const HELP = `\x1b[36mpait\x1b[0m — PAI Tools CLI
   --skip-split     Skip issue splitting assessment
   --no-verify      Skip verification requirement
   --parallel <N>   Run N issues concurrently (default: 1 = sequential)
+  --file <path>    Read tasks from a markdown checklist instead of GitHub
+  example          Write an example plan file (use --file <path> to set name)
 
 \x1b[1mVERIFY FLAGS\x1b[0m
   --skip-e2e       Skip E2E verification step
@@ -81,6 +72,15 @@ const HELP = `\x1b[36mpait\x1b[0m — PAI Tools CLI
   --from <N>          Start from issue #N
   --auto-resolve      Resolve conflicts via Claude (non-interactive)
 
+\x1b[1mDEPS FLAGS\x1b[0m
+  --issue <N>         Target issue number
+  --blocks <N>        Issue that the target issue blocks
+  --blocked-by <N>    Issue that blocks the target issue
+  --parent <N>        Parent issue number (sets a sub-issue relationship)
+  --child <N>         Child/sub-issue number
+  --apply             Apply pending changes without prompting
+  --json              Output as JSON instead of terminal format
+
 \x1b[90mhttps://github.com/SaintPepsi/pai-tools\x1b[0m
 `;
 
@@ -88,12 +88,17 @@ type CommandHandler = () => Promise<void>;
 
 const commands = new Map<string, CommandHandler>([
 	['orchestrate', async () => {
-		const flags = parseFlags(process.argv.slice(3));
+		const args = process.argv.slice(3);
+		if (args[0] === 'example') {
+			const rest = args.slice(1);
+			const fileIdx = rest.indexOf('--file');
+			const output = (fileIdx !== -1 && rest[fileIdx + 1]) ? rest[fileIdx + 1] : 'PLAN.md';
+			const force = rest.includes('--force');
+			await writeExample(output, force);
+			return;
+		}
+		const flags = parseFlags(args);
 		await orchestrate(flags);
-	}],
-	['analyze', async () => {
-		const flags = parseAnalyzeFlags(process.argv.slice(3));
-		await analyze(flags);
 	}],
 	['verify', async () => {
 		const flags = parseVerifyFlags(process.argv.slice(3));
@@ -102,6 +107,10 @@ const commands = new Map<string, CommandHandler>([
 	['finalize', async () => {
 		const flags = parseFinalizeFlags(process.argv.slice(3));
 		await finalize(flags);
+	}],
+	['deps', async () => {
+		const flags = parseDepsFlags(process.argv.slice(3));
+		await deps(flags);
 	}],
 	['setup', setup],
 	['update', async () => {

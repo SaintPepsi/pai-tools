@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { loadState, saveState } from './state.ts';
+import { loadState, saveState } from '@shared/state.ts';
 
 interface TestState {
 	version: number;

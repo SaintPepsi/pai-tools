@@ -5,21 +5,51 @@
  * and agent-driven issue implementation via the Claude CLI.
  */
 
-import { log, Spinner } from '../../shared/log.ts';
-import { runClaude } from '../../shared/claude.ts';
-import type { RunLogger } from '../../shared/logging.ts';
-import type { GitHubIssue, OrchestratorConfig } from './types.ts';
-import { fixVerificationFailure as _fixVerificationFailure } from './verify-fixer.ts';
+import { log, RollingWindow } from '@shared/log.ts';
+import { runClaude } from '@shared/claude.ts';
+import type { RunClaudeOpts } from '@shared/claude.ts';
+import type { RunLogger } from '@shared/logging.ts';
+import type { GitHubIssue } from '@shared/github.ts';
+import type { OrchestratorConfig } from '@tools/orchestrator/types.ts';
+import { fixVerificationFailure as _fixVerificationFailure } from '@tools/orchestrator/verify-fixer.ts';
+import { defaultFsAdapter } from '@shared/adapters/fs.ts';
+
+export interface AgentRunnerDeps {
+	runClaude: (opts: RunClaudeOpts) => Promise<{ ok: boolean; output: string }>;
+	makeWindow: (header: string, logPath: string) => RollingWindow;
+	logDim: (msg: string) => void;
+	parseJson: (text: string) => { ok: true; value: unknown } | { ok: false };
+}
+
+export const defaultAgentRunnerDeps: AgentRunnerDeps = {
+	runClaude,
+	makeWindow: (header, logPath) => new RollingWindow({ header, logPath }),
+	logDim: (msg: string) => log.dim(msg),
+	parseJson: (text: string) => {
+		const result = defaultFsAdapter.parseJson(text);
+		if (result === null) return { ok: false as const };
+		return { ok: true as const, value: result };
+	}
+};
+
+export type AssessSizeResult = {
+	shouldSplit: boolean;
+	proposedSplits: { title: string; body: string }[];
+	reasoning: string;
+};
+
+const assessFallback = (reasoning: string): AssessSizeResult => ({
+	shouldSplit: false,
+	reasoning,
+	proposedSplits: []
+});
 
 export async function assessIssueSize(
 	issue: GitHubIssue,
 	config: OrchestratorConfig,
-	repoRoot: string
-): Promise<{
-	shouldSplit: boolean;
-	proposedSplits: { title: string; body: string }[];
-	reasoning: string;
-}> {
+	repoRoot: string,
+	deps: AgentRunnerDeps = defaultAgentRunnerDeps
+): Promise<AssessSizeResult> {
 	const prompt = `You are assessing whether a GitHub issue is too large for a single Claude Code agent session to implement.
 
 A single agent session can reliably handle:
@@ -45,33 +75,20 @@ Respond in EXACTLY this JSON format (no markdown, no code fences):
 If shouldSplit is false, proposedSplits should be an empty array.
 Be conservative — only split if it's genuinely too large. Most issues with clear acceptance criteria can be done in one pass.`;
 
-	const spinner = new Spinner();
-	spinner.start(`Assessing #${issue.number} size`);
+	log.step(`Assessing #${issue.number} size`);
 
-	const { output: rawResult } = await runClaude({
+	const { output: rawResult } = await deps.runClaude({
 		prompt,
 		model: config.models.assess,
 		cwd: repoRoot
-	}).catch(() => ({
-		ok: false,
-		output: ''
-	}));
+	}).catch(() => ({ ok: false, output: '' }));
 
-	spinner.stop();
+	const jsonMatch: RegExpMatchArray | null = rawResult.match(/\{[\s\S]*\}/);
+	if (!jsonMatch) return assessFallback('No JSON found in assessment response');
 
-	try {
-		const jsonMatch: RegExpMatchArray | null = rawResult.match(/\{[\s\S]*\}/);
-		if (!jsonMatch) {
-			return {
-				shouldSplit: false,
-				reasoning: 'No JSON found in assessment response',
-				proposedSplits: []
-			};
-		}
-		return JSON.parse(jsonMatch[0]);
-	} catch {
-		return { shouldSplit: false, reasoning: 'Failed to parse assessment', proposedSplits: [] };
-	}
+	const parsed = deps.parseJson(jsonMatch[0]);
+	if (!parsed.ok) return assessFallback('Failed to parse assessment');
+	return parsed.value as AssessSizeResult;
 }
 
 export function buildImplementationPrompt(
@@ -112,41 +129,49 @@ Do NOT create a pull request. Just implement, test, and commit.`;
 }
 
 export async function fixVerificationFailure(
-	issueNumber: number,
-	failedStep: string,
-	errorOutput: string,
-	config: OrchestratorConfig,
-	worktreePath: string,
-	logger: RunLogger
+	opts: {
+		issueNumber: number;
+		failedStep: string;
+		errorOutput: string;
+		config: OrchestratorConfig;
+		worktreePath: string;
+		logger: RunLogger;
+	}
 ): Promise<void> {
-	return _fixVerificationFailure({ issueNumber, failedStep, errorOutput, config, worktreePath, logger });
+	return _fixVerificationFailure(opts);
+}
+
+export interface ImplementIssueOpts {
+	issue: GitHubIssue;
+	branchName: string;
+	baseBranch: string;
+	config: OrchestratorConfig;
+	worktreePath: string;
+	logger: RunLogger;
 }
 
 export async function implementIssue(
-	issue: GitHubIssue,
-	branchName: string,
-	baseBranch: string,
-	config: OrchestratorConfig,
-	worktreePath: string,
-	logger: RunLogger
+	opts: ImplementIssueOpts,
+	deps: AgentRunnerDeps = defaultAgentRunnerDeps
 ): Promise<{ ok: boolean; error?: string }> {
+	const { issue, branchName, baseBranch, config, worktreePath, logger } = opts;
 	const prompt = buildImplementationPrompt(issue, branchName, baseBranch, config, worktreePath);
 
-	const spinner = new Spinner();
-	spinner.start(`Agent implementing #${issue.number}`);
+	const header = `Agent implementing #${issue.number}`;
+	const window = deps.makeWindow(header, logger.path);
 
-	const result = await runClaude({
+	const result = await deps.runClaude({
 		prompt,
 		model: config.models.implement,
 		cwd: worktreePath,
 		permissionMode: 'acceptEdits',
-		allowedTools: config.allowedTools
+		allowedTools: config.allowedTools,
+		onChunk: (chunk) => window.update(chunk),
 	});
 
-	spinner.stop();
-	log.dim(result.output.slice(-500));
+	window.clear();
+	deps.logDim(result.output.slice(-500));
 
-	// Log full agent output
 	logger.agentOutput(issue.number, result.output);
 
 	if (!result.ok) {

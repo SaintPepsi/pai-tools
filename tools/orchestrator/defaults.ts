@@ -3,7 +3,7 @@
  * Per-project overrides live in `.pai/orchestrator.json`.
  */
 
-import type { OrchestratorConfig } from './types.ts';
+import type { OrchestratorConfig } from '@tools/orchestrator/types.ts';
 
 export const ORCHESTRATOR_DEFAULTS: OrchestratorConfig = {
 	branchPrefix: 'feat/',

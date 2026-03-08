@@ -11,8 +11,6 @@ beforeAll(async () => {
 
 describe('finalize source: merge success path clears error (regression)', () => {
 	test('source code clears error on successful merge (regression)', () => {
-		// The merge success path must set prState.error = null.
-		// Matches the pattern: status = 'merged' followed by error = null.
 		const mergedIdx = source.indexOf("prState.status = 'merged'");
 		const nextStatusIdx = source.indexOf("prState.status =", mergedIdx + 1);
 		const mergedBlock = source.slice(mergedIdx, nextStatusIdx === -1 ? mergedIdx + 400 : nextStatusIdx);
@@ -61,7 +59,7 @@ describe('finalize source guards (regression)', () => {
 
 	test('promptLine is not defined locally — uses shared module', () => {
 		// Regression: promptLine was duplicated in verify and finalize.
-		// After extraction, promptLine is used in shared/git.ts.
+		// After extraction, promptLine is imported in shared/git.ts via path alias.
 		expect(source).not.toContain('function promptLine');
 		expect(gitSource).toContain("from '@shared/prompt.ts'");
 	});

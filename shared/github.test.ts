@@ -45,6 +45,9 @@ describe('shared/github.ts exports', () => {
 // Source guard: orchestrator imports from shared
 // ---------------------------------------------------------------------------
 
+// Matches either the path alias (@shared/github) or any path ending in shared/github[.ts]
+const githubImportPattern = /from ['"](?:@shared\/github|[^'"]*shared\/github(?:\.ts)?)['"]/;
+
 describe('orchestrator imports from shared/github.ts', () => {
 	const indexSource = Bun.file(join(import.meta.dir, '../tools/orchestrator/index.ts'));
 	const executionSource = Bun.file(join(import.meta.dir, '../tools/orchestrator/execution.ts'));

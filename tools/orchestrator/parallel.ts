@@ -263,7 +263,6 @@ export async function processOneIssue(
 					config,
 					worktreePath,
 					logger,
-					spinnerLabel: `[#${issueNum}] Agent fixing verification`
 				});
 			}
 		},

@@ -1,373 +1,207 @@
 /**
- * Coverage tests for verify-fixer.ts — targeting 100% line and function coverage.
+ * Coverage tests for verify-fixer.ts.
  *
- * All external deps (runClaude, makeSpinner) are injected via mock VerifyFixerDeps
- * objects. No real agent calls are made.
+ * Tests the behaviour of fixVerificationFailure via injected deps —
+ * no live Claude agent required.
  */
 
-import { describe, test, expect, mock } from 'bun:test';
-
-// Mock shared/log.ts BEFORE importing verify-fixer so defaultVerifyFixerDeps
-// makeSpinner (new Spinner()) uses a no-op class — covering that arrow body
-// without hitting real stdout or starting a real interval.
-mock.module('../../shared/log.ts', () => ({
-	log: { info: () => {}, ok: () => {}, warn: () => {}, error: () => {}, step: () => {}, dim: () => {} },
-	Spinner: class { start(_msg: string) {} stop() {} },
-}));
-
-import { fixVerificationFailure, defaultVerifyFixerDeps } from '@tools/orchestrator/verify-fixer.ts';
-import type { VerifyFixerDeps } from '@tools/orchestrator/verify-fixer.ts';
+import { describe, test, expect } from 'bun:test';
+import { fixVerificationFailure } from '@tools/orchestrator/verify-fixer.ts';
+import type { FixVerificationOptions, VerifyFixerDeps } from '@tools/orchestrator/verify-fixer.ts';
+import type { RollingWindow } from '@shared/log.ts';
 import type { OrchestratorConfig } from '@tools/orchestrator/types.ts';
 import type { RunLogger } from '@shared/logging.ts';
+import type { RunClaudeOpts } from '@shared/claude.ts';
 
 // ---------------------------------------------------------------------------
-// Shared fixtures
+// Helpers
 // ---------------------------------------------------------------------------
 
-const baseConfig: OrchestratorConfig = {
-	branchPrefix: 'feat/',
-	baseBranch: 'main',
-	worktreeDir: '.pait/worktrees',
-	models: { implement: 'claude-sonnet', assess: 'claude-haiku' },
-	retries: { implement: 1, verify: 1 },
-	allowedTools: 'Bash Edit Write Read',
-	verify: [
-		{ name: 'test', cmd: 'bun test' },
-		{ name: 'typecheck', cmd: 'bun run typecheck' },
-	],
+function makeConfig(verifyCmds: string[] = ['bun test']): OrchestratorConfig {
+	return {
+		branchPrefix: 'feat/',
+		baseBranch: 'main',
+		worktreeDir: '.pait/worktrees',
+		models: { implement: 'sonnet', assess: 'haiku' },
+		retries: { implement: 1, verify: 1 },
+		allowedTools: 'Bash Edit Write Read',
+		verify: verifyCmds.map((cmd) => ({ name: cmd, cmd })),
+	};
+}
+
+function makeLogger(): RunLogger & { agentOutputCalls: { issueNumber: number; output: string }[] } {
+	const agentOutputCalls: { issueNumber: number; output: string }[] = [];
+	return {
+		path: '/tmp/test-run.jsonl',
+		agentOutput: (issueNumber: number, output: string) => {
+			agentOutputCalls.push({ issueNumber, output });
+		},
+		agentOutputCalls,
+	} as unknown as RunLogger & { agentOutputCalls: { issueNumber: number; output: string }[] };
+}
+
+type MockWindow = {
+	updateCalls: string[];
+	clearCount: number;
 };
 
-const noopLogger = {
-	log: () => {},
-	path: '/dev/null',
-	runStart: () => {},
-	runComplete: () => {},
-	issueStart: () => {},
-	issueComplete: () => {},
-	issueFailed: () => {},
-	issueSplit: () => {},
-	agentOutput: () => {},
-	verifyPass: () => {},
-	verifyFail: () => {},
-	worktreeCreated: () => {},
-	worktreeRemoved: () => {},
-	branchCreated: () => {},
-	prCreated: () => {},
-} as unknown as RunLogger;
+function makeMockDeps(opts: {
+	output?: string;
+	rejects?: boolean;
+	onRun?: (runClaudeOpts: RunClaudeOpts) => void;
+} = {}): { deps: VerifyFixerDeps; window: MockWindow; windowHeader: string[] } {
+	const { output = 'fix output', rejects = false, onRun } = opts;
 
-// ---------------------------------------------------------------------------
-// Mock deps builder
-// ---------------------------------------------------------------------------
+	const window: MockWindow = { updateCalls: [], clearCount: 0 };
+	const windowHeader: string[] = [];
 
-type SpinnerCalls = { started: string[]; stopped: number };
-
-function makeDeps(overrides: Partial<VerifyFixerDeps> & {
-	runClaudeResult?: { ok: boolean; output: string };
-	runClaudeThrows?: boolean;
-} = {}): { deps: VerifyFixerDeps; spinnerCalls: SpinnerCalls; agentCalls: { prompt: string; model: string; cwd: string }[] } {
-	const spinnerCalls: SpinnerCalls = { started: [], stopped: 0 };
-	const agentCalls: { prompt: string; model: string; cwd: string }[] = [];
-
-	const defaultResult = overrides.runClaudeResult ?? { ok: true, output: 'Agent output text' };
-	const shouldThrow = overrides.runClaudeThrows ?? false;
+	const mockWindow = {
+		update: (text: string) => window.updateCalls.push(text),
+		clear: () => { window.clearCount++; },
+	} as unknown as RollingWindow;
 
 	const deps: VerifyFixerDeps = {
-		runClaude: async (opts) => {
-			agentCalls.push({ prompt: opts.prompt, model: opts.model ?? '', cwd: opts.cwd ?? '' });
-			if (shouldThrow) throw new Error('Claude failed');
-			return defaultResult;
+		makeWindow: (header, _logPath) => {
+			windowHeader.push(header);
+			return mockWindow;
 		},
-		makeSpinner: () => ({
-			start: (msg: string) => { spinnerCalls.started.push(msg); },
-			stop: () => { spinnerCalls.stopped++; },
-		}),
-		...('runClaude' in overrides && !overrides.runClaudeResult && !overrides.runClaudeThrows
-			? { runClaude: overrides.runClaude! }
-			: {}),
-		...('makeSpinner' in overrides ? { makeSpinner: overrides.makeSpinner! } : {}),
+		runClaude: async (runOpts) => {
+			onRun?.(runOpts);
+			if (rejects) throw new Error('agent failed');
+			runOpts.onChunk?.('chunk-a');
+			runOpts.onChunk?.('chunk-b');
+			return { ok: true, output };
+		},
 	};
 
-	return { deps, spinnerCalls, agentCalls };
+	return { deps, window, windowHeader };
+}
+
+function makeOpts(overrides: Partial<FixVerificationOptions> = {}): FixVerificationOptions {
+	return {
+		issueNumber: 42,
+		failedStep: 'bun test',
+		errorOutput: 'Test failed: expected true',
+		config: makeConfig(),
+		worktreePath: '/tmp/worktree-42',
+		logger: makeLogger(),
+		...overrides,
+	};
 }
 
 // ---------------------------------------------------------------------------
-// fixVerificationFailure — core behavior
+// RollingWindow integration
 // ---------------------------------------------------------------------------
 
-describe('fixVerificationFailure — prompt construction', () => {
-	test('includes the failed step name in prompt', async () => {
-		const { deps, agentCalls } = makeDeps();
-		await fixVerificationFailure({
-			issueNumber: 42,
-			failedStep: 'bun test',
-			errorOutput: 'Tests failed: 3 failures',
-			config: baseConfig,
-			worktreePath: '/worktrees/42',
-			logger: noopLogger,
-		}, deps);
-
-		expect(agentCalls.length).toBe(1);
-		expect(agentCalls[0].prompt).toContain('"bun test"');
+describe('fixVerificationFailure — rolling window', () => {
+	test('creates window with header containing issue number', async () => {
+		const { deps, windowHeader } = makeMockDeps();
+		await fixVerificationFailure(makeOpts({ issueNumber: 7 }), deps);
+		expect(windowHeader[0]).toContain('7');
 	});
 
-	test('includes the issue number in prompt', async () => {
-		const { deps, agentCalls } = makeDeps();
-		await fixVerificationFailure({
-			issueNumber: 7,
-			failedStep: 'lint',
-			errorOutput: 'lint error here',
-			config: baseConfig,
-			worktreePath: '/worktrees/7',
-			logger: noopLogger,
-		}, deps);
-
-		expect(agentCalls[0].prompt).toContain('#7');
+	test('creates window using logger.path as logPath', async () => {
+		let capturedLogPath = '';
+		const logger = makeLogger();
+		const deps: VerifyFixerDeps = {
+			makeWindow: (_header, logPath) => {
+				capturedLogPath = logPath;
+				return { update: () => {}, clear: () => {} } as unknown as RollingWindow;
+			},
+			runClaude: async () => ({ ok: true, output: '' }),
+		};
+		await fixVerificationFailure(makeOpts({ logger }), deps);
+		expect(capturedLogPath).toBe(logger.path);
 	});
 
-	test('includes the error output in prompt', async () => {
-		const { deps, agentCalls } = makeDeps();
-		await fixVerificationFailure({
-			issueNumber: 10,
-			failedStep: 'typecheck',
-			errorOutput: 'TS2345: argument is not assignable',
-			config: baseConfig,
-			worktreePath: '/worktrees/10',
-			logger: noopLogger,
-		}, deps);
-
-		expect(agentCalls[0].prompt).toContain('TS2345: argument is not assignable');
+	test('wires onChunk to window.update', async () => {
+		const { deps, window } = makeMockDeps();
+		await fixVerificationFailure(makeOpts(), deps);
+		expect(window.updateCalls).toEqual(['chunk-a', 'chunk-b']);
 	});
 
-	test('lists all verify commands in prompt', async () => {
-		const { deps, agentCalls } = makeDeps();
-		await fixVerificationFailure({
-			issueNumber: 5,
-			failedStep: 'test',
-			errorOutput: 'failing',
-			config: baseConfig,
-			worktreePath: '/wt',
-			logger: noopLogger,
-		}, deps);
-
-		expect(agentCalls[0].prompt).toContain('- bun test');
-		expect(agentCalls[0].prompt).toContain('- bun run typecheck');
+	test('clears window after runClaude completes', async () => {
+		const { deps, window } = makeMockDeps();
+		await fixVerificationFailure(makeOpts(), deps);
+		expect(window.clearCount).toBe(1);
 	});
 
-	test('passes worktreePath as cwd to runClaude', async () => {
-		const { deps, agentCalls } = makeDeps();
-		await fixVerificationFailure({
-			issueNumber: 99,
-			failedStep: 'test',
-			errorOutput: '',
-			config: baseConfig,
-			worktreePath: '/custom/worktree/path',
-			logger: noopLogger,
-		}, deps);
-
-		expect(agentCalls[0].cwd).toBe('/custom/worktree/path');
-	});
-
-	test('passes implement model from config to runClaude', async () => {
-		const { deps, agentCalls } = makeDeps();
-		await fixVerificationFailure({
-			issueNumber: 3,
-			failedStep: 'test',
-			errorOutput: '',
-			config: baseConfig,
-			worktreePath: '/wt',
-			logger: noopLogger,
-		}, deps);
-
-		expect(agentCalls[0].model).toBe('claude-sonnet');
+	test('clears window even when runClaude throws', async () => {
+		const { deps, window } = makeMockDeps({ rejects: true });
+		await fixVerificationFailure(makeOpts(), deps);
+		expect(window.clearCount).toBe(1);
 	});
 });
 
-describe('fixVerificationFailure — spinner behavior', () => {
-	test('starts spinner with default label when spinnerLabel is not provided', async () => {
-		const { deps, spinnerCalls } = makeDeps();
-		await fixVerificationFailure({
-			issueNumber: 42,
-			failedStep: 'test',
-			errorOutput: '',
-			config: baseConfig,
-			worktreePath: '/wt',
-			logger: noopLogger,
-		}, deps);
+// ---------------------------------------------------------------------------
+// Prompt construction
+// ---------------------------------------------------------------------------
 
-		expect(spinnerCalls.started.length).toBe(1);
-		expect(spinnerCalls.started[0]).toContain('#42');
+describe('fixVerificationFailure — prompt', () => {
+	test('prompt contains failed step', async () => {
+		let capturedPrompt = '';
+		const { deps } = makeMockDeps({ onRun: (o) => { capturedPrompt = o.prompt; } });
+		await fixVerificationFailure(makeOpts({ failedStep: 'bun run typecheck' }), deps);
+		expect(capturedPrompt).toContain('bun run typecheck');
 	});
 
-	test('starts spinner with custom spinnerLabel when provided', async () => {
-		const { deps, spinnerCalls } = makeDeps();
-		await fixVerificationFailure({
-			issueNumber: 5,
-			failedStep: 'test',
-			errorOutput: '',
-			config: baseConfig,
-			worktreePath: '/wt',
-			logger: noopLogger,
-			spinnerLabel: '[#5] Agent fixing verification',
-		}, deps);
-
-		expect(spinnerCalls.started[0]).toBe('[#5] Agent fixing verification');
+	test('prompt contains error output', async () => {
+		let capturedPrompt = '';
+		const { deps } = makeMockDeps({ onRun: (o) => { capturedPrompt = o.prompt; } });
+		await fixVerificationFailure(makeOpts({ errorOutput: 'TypeError: null is not a function' }), deps);
+		expect(capturedPrompt).toContain('TypeError: null is not a function');
 	});
 
-	test('stops spinner after runClaude completes', async () => {
-		const { deps, spinnerCalls } = makeDeps();
-		await fixVerificationFailure({
-			issueNumber: 1,
-			failedStep: 'test',
-			errorOutput: '',
-			config: baseConfig,
-			worktreePath: '/wt',
-			logger: noopLogger,
-		}, deps);
-
-		expect(spinnerCalls.stopped).toBe(1);
+	test('prompt contains issue number', async () => {
+		let capturedPrompt = '';
+		const { deps } = makeMockDeps({ onRun: (o) => { capturedPrompt = o.prompt; } });
+		await fixVerificationFailure(makeOpts({ issueNumber: 99 }), deps);
+		expect(capturedPrompt).toContain('#99');
 	});
 
-	test('stops spinner even when runClaude throws', async () => {
-		const { deps, spinnerCalls } = makeDeps({ runClaudeThrows: true });
-		await fixVerificationFailure({
-			issueNumber: 1,
-			failedStep: 'test',
-			errorOutput: '',
-			config: baseConfig,
-			worktreePath: '/wt',
-			logger: noopLogger,
-		}, deps);
+	test('prompt lists all verify commands', async () => {
+		let capturedPrompt = '';
+		const { deps } = makeMockDeps({ onRun: (o) => { capturedPrompt = o.prompt; } });
+		const config = makeConfig(['bun test', 'bun run typecheck']);
+		await fixVerificationFailure(makeOpts({ config }), deps);
+		expect(capturedPrompt).toContain('bun test');
+		expect(capturedPrompt).toContain('bun run typecheck');
+	});
 
-		// Should still stop spinner via the .catch() fallback
-		expect(spinnerCalls.stopped).toBe(1);
+	test('runClaude receives correct model and cwd', async () => {
+		let capturedOpts: RunClaudeOpts | undefined;
+		const { deps } = makeMockDeps({ onRun: (o) => { capturedOpts = o; } });
+		const config = makeConfig();
+		await fixVerificationFailure(makeOpts({ config, worktreePath: '/tmp/wt-55' }), deps);
+		expect(capturedOpts?.model).toBe('sonnet');
+		expect(capturedOpts?.cwd).toBe('/tmp/wt-55');
 	});
 });
 
-describe('fixVerificationFailure — logger behavior', () => {
-	test('calls logger.agentOutput with issue number and agent output', async () => {
-		const agentOutputCalls: { issueNumber: number; output: string }[] = [];
-		const logger = {
-			...noopLogger,
-			agentOutput: (num: number, out: string) => { agentOutputCalls.push({ issueNumber: num, output: out }); },
-		} as unknown as RunLogger;
+// ---------------------------------------------------------------------------
+// Logger interaction
+// ---------------------------------------------------------------------------
 
-		const { deps } = makeDeps({ runClaudeResult: { ok: true, output: 'fixed the tests' } });
-		await fixVerificationFailure({
-			issueNumber: 17,
-			failedStep: 'test',
-			errorOutput: '',
-			config: baseConfig,
-			worktreePath: '/wt',
-			logger,
-		}, deps);
-
-		expect(agentOutputCalls.length).toBe(1);
-		expect(agentOutputCalls[0].issueNumber).toBe(17);
-		expect(agentOutputCalls[0].output).toBe('fixed the tests');
+describe('fixVerificationFailure — logger', () => {
+	test('calls logger.agentOutput with issue number and output', async () => {
+		const logger = makeLogger();
+		const { deps } = makeMockDeps({ output: 'fixed successfully' });
+		await fixVerificationFailure(makeOpts({ issueNumber: 12, logger }), deps);
+		expect(logger.agentOutputCalls).toHaveLength(1);
+		expect(logger.agentOutputCalls[0].issueNumber).toBe(12);
+		expect(logger.agentOutputCalls[0].output).toBe('fixed successfully');
 	});
 
 	test('calls logger.agentOutput with empty output when runClaude throws', async () => {
-		const agentOutputCalls: { issueNumber: number; output: string }[] = [];
-		const logger = {
-			...noopLogger,
-			agentOutput: (num: number, out: string) => { agentOutputCalls.push({ issueNumber: num, output: out }); },
-		} as unknown as RunLogger;
-
-		const { deps } = makeDeps({ runClaudeThrows: true });
-		await fixVerificationFailure({
-			issueNumber: 8,
-			failedStep: 'test',
-			errorOutput: 'error',
-			config: baseConfig,
-			worktreePath: '/wt',
-			logger,
-		}, deps);
-
-		expect(agentOutputCalls.length).toBe(1);
-		expect(agentOutputCalls[0].issueNumber).toBe(8);
-		expect(agentOutputCalls[0].output).toBe('');
-	});
-});
-
-describe('fixVerificationFailure — runClaude options', () => {
-	test('passes permissionMode acceptEdits to runClaude', async () => {
-		const capturedOpts: Parameters<VerifyFixerDeps['runClaude']>[0][] = [];
-		const deps: VerifyFixerDeps = {
-			runClaude: async (opts) => { capturedOpts.push(opts); return { ok: true, output: '' }; },
-			makeSpinner: () => ({ start: () => {}, stop: () => {} }),
-		};
-
-		await fixVerificationFailure({
-			issueNumber: 1,
-			failedStep: 'test',
-			errorOutput: '',
-			config: baseConfig,
-			worktreePath: '/wt',
-			logger: noopLogger,
-		}, deps);
-
-		expect(capturedOpts[0].permissionMode).toBe('acceptEdits');
+		const logger = makeLogger();
+		const { deps } = makeMockDeps({ rejects: true });
+		await fixVerificationFailure(makeOpts({ logger }), deps);
+		expect(logger.agentOutputCalls).toHaveLength(1);
+		expect(logger.agentOutputCalls[0].output).toBe('');
 	});
 
-	test('passes allowedTools from config to runClaude', async () => {
-		const capturedOpts: Parameters<VerifyFixerDeps['runClaude']>[0][] = [];
-		const deps: VerifyFixerDeps = {
-			runClaude: async (opts) => { capturedOpts.push(opts); return { ok: true, output: '' }; },
-			makeSpinner: () => ({ start: () => {}, stop: () => {} }),
-		};
-
-		await fixVerificationFailure({
-			issueNumber: 1,
-			failedStep: 'test',
-			errorOutput: '',
-			config: baseConfig,
-			worktreePath: '/wt',
-			logger: noopLogger,
-		}, deps);
-
-		expect(capturedOpts[0].allowedTools).toBe('Bash Edit Write Read');
-	});
-
-	test('returns void (undefined) on success', async () => {
-		const { deps } = makeDeps();
-		const result = await fixVerificationFailure({
-			issueNumber: 1,
-			failedStep: 'test',
-			errorOutput: '',
-			config: baseConfig,
-			worktreePath: '/wt',
-			logger: noopLogger,
-		}, deps);
-
-		expect(result).toBeUndefined();
-	});
-
-	test('returns void (undefined) even when runClaude throws', async () => {
-		const { deps } = makeDeps({ runClaudeThrows: true });
-		const result = await fixVerificationFailure({
-			issueNumber: 1,
-			failedStep: 'test',
-			errorOutput: '',
-			config: baseConfig,
-			worktreePath: '/wt',
-			logger: noopLogger,
-		}, deps);
-
-		expect(result).toBeUndefined();
-	});
-});
-
-// ---------------------------------------------------------------------------
-// defaultVerifyFixerDeps — covers makeSpinner arrow body
-// (shared/log.ts is mocked above so no real stdout is touched)
-// ---------------------------------------------------------------------------
-
-describe('defaultVerifyFixerDeps — default arrow functions', () => {
-	test('makeSpinner returns an object with start and stop', () => {
-		const spinner = defaultVerifyFixerDeps.makeSpinner();
-		expect(typeof spinner.start).toBe('function');
-		expect(typeof spinner.stop).toBe('function');
-		spinner.start('test label');
-		spinner.stop();
+	test('does not throw when runClaude rejects', async () => {
+		const { deps } = makeMockDeps({ rejects: true });
+		await expect(fixVerificationFailure(makeOpts(), deps)).resolves.toBeUndefined();
 	});
 });

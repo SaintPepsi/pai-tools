@@ -5,7 +5,7 @@
  * and agent-driven issue implementation via the Claude CLI.
  */
 
-import { log, Spinner } from '@shared/log.ts';
+import { log, RollingWindow } from '@shared/log.ts';
 import { runClaude } from '@shared/claude.ts';
 import type { RunClaudeOpts } from '@shared/claude.ts';
 import type { RunLogger } from '@shared/logging.ts';
@@ -16,14 +16,14 @@ import { defaultFsAdapter } from '@shared/adapters/fs.ts';
 
 export interface AgentRunnerDeps {
 	runClaude: (opts: RunClaudeOpts) => Promise<{ ok: boolean; output: string }>;
-	makeSpinner: () => { start: (msg: string) => void; stop: () => void };
+	makeWindow: (header: string, logPath: string) => RollingWindow;
 	logDim: (msg: string) => void;
 	parseJson: (text: string) => { ok: true; value: unknown } | { ok: false };
 }
 
 export const defaultAgentRunnerDeps: AgentRunnerDeps = {
 	runClaude,
-	makeSpinner: () => new Spinner(),
+	makeWindow: (header, logPath) => new RollingWindow({ header, logPath }),
 	logDim: (msg: string) => log.dim(msg),
 	parseJson: (text: string) => {
 		const result = defaultFsAdapter.parseJson(text);
@@ -75,16 +75,13 @@ Respond in EXACTLY this JSON format (no markdown, no code fences):
 If shouldSplit is false, proposedSplits should be an empty array.
 Be conservative — only split if it's genuinely too large. Most issues with clear acceptance criteria can be done in one pass.`;
 
-	const spinner = deps.makeSpinner();
-	spinner.start(`Assessing #${issue.number} size`);
+	log.step(`Assessing #${issue.number} size`);
 
 	const { output: rawResult } = await deps.runClaude({
 		prompt,
 		model: config.models.assess,
 		cwd: repoRoot
 	}).catch(() => ({ ok: false, output: '' }));
-
-	spinner.stop();
 
 	const jsonMatch: RegExpMatchArray | null = rawResult.match(/\{[\s\S]*\}/);
 	if (!jsonMatch) return assessFallback('No JSON found in assessment response');
@@ -160,18 +157,19 @@ export async function implementIssue(
 	const { issue, branchName, baseBranch, config, worktreePath, logger } = opts;
 	const prompt = buildImplementationPrompt(issue, branchName, baseBranch, config, worktreePath);
 
-	const spinner = deps.makeSpinner();
-	spinner.start(`Agent implementing #${issue.number}`);
+	const header = `Agent implementing #${issue.number}`;
+	const window = deps.makeWindow(header, logger.path);
 
 	const result = await deps.runClaude({
 		prompt,
 		model: config.models.implement,
 		cwd: worktreePath,
 		permissionMode: 'acceptEdits',
-		allowedTools: config.allowedTools
+		allowedTools: config.allowedTools,
+		onChunk: (chunk) => window.update(chunk),
 	});
 
-	spinner.stop();
+	window.clear();
 	deps.logDim(result.output.slice(-500));
 
 	logger.agentOutput(issue.number, result.output);

@@ -6,7 +6,7 @@
  */
 
 import { join, resolve } from 'node:path';
-import { log } from '@shared/log.ts';
+import { log, RollingWindow } from '@shared/log.ts';
 import { promptLine, defaultPromptDeps } from '@shared/prompt.ts';
 import { runClaude, defaultDeps as defaultClaudeDeps } from '@shared/claude.ts';
 import type { RunClaudeOpts } from '@shared/claude.ts';
@@ -43,6 +43,8 @@ export interface GitDeps {
 	claude: (opts: RunClaudeOpts) => Promise<{ ok: boolean; output: string }>;
 	/** Prompt the user for a single line of input. */
 	prompt: (question: string) => Promise<string>;
+	/** Create a RollingWindow for streaming output display. */
+	makeWindow: (header: string, logPath: string) => RollingWindow;
 }
 
 async function defaultExec(cmd: string[], opts?: { cwd?: string; env?: Record<string, string> }) {
@@ -60,6 +62,7 @@ const defaultDeps: GitDeps = {
 	env: process.env as Record<string, string | undefined>,
 	claude: runClaude,
 	prompt: promptLine,
+	makeWindow: (header, logPath) => new RollingWindow({ header, logPath }),
 };
 
 export const defaultGitDeps: GitDeps = defaultDeps;
@@ -278,7 +281,14 @@ ${conflictContent}
 
 Output ONLY the resolved file content. No explanation, no code fences, just the file content.`;
 
-			const result = await deps.claude({ prompt, model: 'sonnet', cwd: repoRoot });
+			const window = deps.makeWindow(`Resolving conflict: ${c.file}`, '');
+			const result = await deps.claude({
+				prompt,
+				model: 'sonnet',
+				cwd: repoRoot,
+				onChunk: (chunk) => window.update(chunk),
+			});
+			window.clear();
 
 			if (result.ok && result.output.trim()) {
 				const validated = validateResolvedContent(result.output, c.file);
@@ -362,7 +372,14 @@ ${conflictContent}
 
 Output ONLY the resolved file content. No explanation, no code fences, just the file content.`;
 
-		const result = await deps.claude({ prompt, model: 'sonnet', cwd: repoRoot });
+		const window = deps.makeWindow(`Auto-resolving conflict: ${c.file}`, '');
+		const result = await deps.claude({
+			prompt,
+			model: 'sonnet',
+			cwd: repoRoot,
+			onChunk: (chunk) => window.update(chunk),
+		});
+		window.clear();
 
 		if (!result.ok || !result.output.trim()) {
 			log.error(`Failed to auto-resolve ${c.file}`);

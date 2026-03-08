@@ -6,20 +6,20 @@
  * parallel scheduler (parallel.ts).
  */
 
-import { Spinner } from '@shared/log.ts';
-import { runClaude } from '@shared/claude.ts';
+import { RollingWindow } from '@shared/log.ts';
+import { runClaude as _runClaude } from '@shared/claude.ts';
 import type { RunClaudeOpts } from '@shared/claude.ts';
 import type { RunLogger } from '@shared/logging.ts';
 import type { OrchestratorConfig } from '@tools/orchestrator/types.ts';
 
 export interface VerifyFixerDeps {
+	makeWindow: (header: string, logPath: string) => RollingWindow;
 	runClaude: (opts: RunClaudeOpts) => Promise<{ ok: boolean; output: string }>;
-	makeSpinner: () => { start: (msg: string) => void; stop: () => void };
 }
 
 export const defaultVerifyFixerDeps: VerifyFixerDeps = {
-	runClaude,
-	makeSpinner: () => new Spinner()
+	makeWindow: (header, logPath) => new RollingWindow({ header, logPath }),
+	runClaude: _runClaude,
 };
 
 export interface FixVerificationOptions {
@@ -29,8 +29,6 @@ export interface FixVerificationOptions {
 	config: OrchestratorConfig;
 	worktreePath: string;
 	logger: RunLogger;
-	/** Optional spinner label override (e.g. "[#5] Agent fixing verification"). */
-	spinnerLabel?: string;
 }
 
 /**
@@ -42,9 +40,9 @@ export interface FixVerificationOptions {
  */
 export async function fixVerificationFailure(
 	opts: FixVerificationOptions,
-	deps: VerifyFixerDeps = defaultVerifyFixerDeps
+	deps: VerifyFixerDeps = defaultVerifyFixerDeps,
 ): Promise<void> {
-	const { issueNumber, failedStep, errorOutput, config, worktreePath, logger, spinnerLabel } = opts;
+	const { issueNumber, failedStep, errorOutput, config, worktreePath, logger } = opts;
 
 	const verifyList = config.verify.map((v) => `- ${v.cmd}`).join('\n');
 	const fixPrompt = `The verification step "${failedStep}" failed for issue #${issueNumber}.
@@ -57,18 +55,18 @@ ${verifyList}
 
 Commit your fixes referencing #${issueNumber}.`;
 
-	const label = spinnerLabel ?? `Agent fixing verification for #${issueNumber}`;
-	const spinner = deps.makeSpinner();
-	spinner.start(label);
+	const header = `Agent fixing verification for #${issueNumber}`;
+	const window = deps.makeWindow(header, logger.path);
 
 	const fixResult = await deps.runClaude({
 		prompt: fixPrompt,
 		model: config.models.implement,
 		cwd: worktreePath,
 		permissionMode: 'acceptEdits',
-		allowedTools: config.allowedTools
+		allowedTools: config.allowedTools,
+		onChunk: (chunk) => window.update(chunk),
 	}).catch(() => ({ ok: false, output: '' }));
 
-	spinner.stop();
+	window.clear();
 	logger.agentOutput(issueNumber, fixResult.output);
 }

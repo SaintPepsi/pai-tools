@@ -13,6 +13,9 @@ describe('CLI help text sync', () => {
 	const finalizeSource = defaultFsAdapter.readFile(
 		join(import.meta.dir, 'tools/finalize/index.ts')
 	);
+	const depsSource = defaultFsAdapter.readFile(
+		join(import.meta.dir, 'tools/deps/flags.ts')
+	);
 
 	test('every orchestrator flag in parseFlags appears in CLI HELP', () => {
 		// Extract all --flag-name patterns from parseFlags function
@@ -91,6 +94,32 @@ describe('CLI help text sync', () => {
 			);
 		}
 	});
+
+	test('every deps flag in parseDepsFlags appears in CLI HELP', () => {
+		const parseFlagsMatch = depsSource.match(
+			/function parseDepsFlags[\s\S]*?^}/m
+		);
+		expect(parseFlagsMatch).not.toBeNull();
+
+		const flagMatches = parseFlagsMatch![0].matchAll(/'(--[\w-]+)'/g);
+		const flags = [...flagMatches].map((m) => m[1]);
+
+		expect(flags.length).toBeGreaterThan(0);
+
+		const helpMatch = cliSource.match(/const HELP = `[\s\S]*?`;/);
+		expect(helpMatch).not.toBeNull();
+		const helpText = helpMatch![0];
+
+		const missing = flags
+			.filter((flag) => flag !== '--help')
+			.filter((flag) => !helpText.includes(flag));
+		if (missing.length > 0) {
+			throw new Error(
+				`Deps flags missing from CLI help text: ${missing.join(', ')}\n` +
+					'Update the HELP string in cli.ts to include these flags.'
+			);
+		}
+	});
 });
 
 describe('Tool README flag sync', () => {
@@ -105,7 +134,8 @@ describe('Tool README flag sync', () => {
 	const tools = [
 		{ name: 'orchestrator', fn: 'parseFlags', dir: 'tools/orchestrator', file: 'flags.ts' },
 		{ name: 'verify', fn: 'parseVerifyFlags', dir: 'tools/verify', file: 'index.ts' },
-		{ name: 'finalize', fn: 'parseFinalizeFlags', dir: 'tools/finalize', file: 'index.ts' }
+		{ name: 'finalize', fn: 'parseFinalizeFlags', dir: 'tools/finalize', file: 'index.ts' },
+		{ name: 'deps', fn: 'parseDepsFlags', dir: 'tools/deps', file: 'flags.ts' },
 	];
 
 	for (const tool of tools) {

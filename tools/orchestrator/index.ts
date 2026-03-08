@@ -113,7 +113,7 @@ export async function orchestrate(flags: OrchestratorFlags, deps: OrchestrateDep
 	if (flags.reset) {
 		deps.clearState(repoRoot, 'orchestrator');
 		deps.log.ok('State cleared');
-		const hasOtherFlags = flags.dryRun || flags.statusOnly || flags.singleMode || flags.fromIssue !== null;
+		const hasOtherFlags = flags.dryRun || flags.statusOnly || flags.singleMode || flags.fromIssue !== null || flags.file;
 		if (!hasOtherFlags) return;
 	}
 

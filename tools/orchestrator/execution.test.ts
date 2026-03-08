@@ -114,6 +114,7 @@ function makeDeps(overrides: Partial<ExecutionDeps> = {}): { deps: ExecutionDeps
 		implementIssue: async () => { track('implementIssue'); return { ok: true }; },
 		fixVerificationFailure: async () => {},
 		runVerify: async () => { track('runVerify'); return { ok: true, steps: [] }; },
+		checkForChanges: async () => ({ hasChanges: true }),
 		...overrides,
 	};
 	return { deps, calls };
@@ -756,6 +757,41 @@ describe('runMainLoop — retry fixer callbacks', () => {
 		await runMainLoop({ ...makeOpts([1], graph, state, {}, deps), config });
 
 		expect(fixVerifyCalled).toBe(false);
+		expect(state.issues[1]?.status).toBe('completed');
+	});
+});
+
+// ---------------------------------------------------------------------------
+// runMainLoop — zero-diff detection
+// ---------------------------------------------------------------------------
+
+describe('runMainLoop — zero-diff detection', () => {
+	test('fails issue when agent produces no changes', async () => {
+		const issue1 = makeIssue(1);
+		const graph = makeGraph(makeNode(issue1));
+		const state = makeState();
+		const { deps } = makeDeps({
+			checkForChanges: async () => ({ hasChanges: false }),
+		});
+
+		await expect(
+			runMainLoop(makeOpts([1], graph, state, {}, deps))
+		).rejects.toThrow('exit(1)');
+		expect(state.issues[1]?.status).toBe('failed');
+		expect(state.issues[1]?.error).toContain('no changes');
+	});
+
+	test('proceeds to verification when agent produces changes', async () => {
+		const issue1 = makeIssue(1);
+		const graph = makeGraph(makeNode(issue1));
+		const state = makeState();
+		const { deps, calls } = makeDeps({
+			checkForChanges: async () => ({ hasChanges: true }),
+		});
+
+		await runMainLoop(makeOpts([1], graph, state, {}, deps));
+
+		expect(calls.some(c => c.fn === 'runVerify')).toBe(true);
 		expect(state.issues[1]?.status).toBe('completed');
 	});
 });

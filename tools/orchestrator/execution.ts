@@ -44,6 +44,7 @@ export interface ExecutionAgentDeps {
 	implementIssue: typeof implementIssue;
 	fixVerificationFailure: typeof fixVerificationFailure;
 	runVerify: typeof runVerify;
+	checkForChanges: (worktreePath: string, baseBranch: string) => Promise<{ hasChanges: boolean }>;
 }
 
 export interface ExecutionStateDeps {
@@ -96,6 +97,11 @@ export const defaultExecutionDeps: ExecutionDeps = {
 	implementIssue,
 	fixVerificationFailure,
 	runVerify,
+	checkForChanges: async (worktreePath: string, baseBranch: string) => {
+		const proc = Bun.spawnSync(['git', '-C', worktreePath, 'diff', '--stat', baseBranch]);
+		const output = proc.stdout?.toString().trim() ?? '';
+		return { hasChanges: output.length > 0 };
+	},
 	saveState,
 	getIssueState,
 	withRetries,
@@ -310,6 +316,18 @@ export async function runMainLoop(opts: RunMainLoopOptions): Promise<void> {
 			logger.issueFailed(issueNum, issueState.error);
 			await d.removeWorktree(worktreePath, node.branch, repoRoot, logger, issueNum);
 			d.log.error('HALTING — implementation failed');
+			d.exit(1);
+		}
+
+		// Zero-diff check — fail fast if agent produced no changes
+		const diffCheck = await d.checkForChanges(worktreePath, baseBranch);
+		if (!diffCheck.hasChanges) {
+			d.log.error('Agent produced no changes — nothing to verify');
+			issueState.status = 'failed';
+			issueState.error = 'Agent produced no changes';
+			d.saveState(state, stateFile);
+			logger.issueFailed(issueNum, issueState.error);
+			await d.removeWorktree(worktreePath, node.branch, repoRoot, logger, issueNum);
 			d.exit(1);
 		}
 

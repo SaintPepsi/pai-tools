@@ -15,7 +15,8 @@ export const ORCHESTRATOR_DEFAULTS: OrchestratorConfig = {
 	},
 	retries: {
 		implement: 1,
-		verify: 1
+		verify: 1,
+		requirements: 1
 	},
 	allowedTools: 'Bash Edit Write Read Glob Grep',
 	verify: []

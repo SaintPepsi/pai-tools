@@ -54,14 +54,14 @@ const baseConfig: OrchestratorConfig = {
 	baseBranch: 'main',
 	worktreeDir: '.pait/worktrees',
 	models: { implement: 'claude-sonnet', assess: 'claude-haiku' },
-	retries: { implement: 0, verify: 0 },
+	retries: { implement: 0, verify: 0, requirements: 0 },
 	allowedTools: 'Bash Edit Write Read',
 	verify: [{ name: 'test', cmd: 'bun test' }],
 };
 
 const baseFlags: OrchestratorFlags = {
 	dryRun: false, reset: false, statusOnly: false, skipE2e: true,
-	skipSplit: true, noVerify: false, singleMode: false,
+	skipSplit: true, skipRequirements: false, noVerify: false, singleMode: false,
 	singleIssue: null, fromIssue: null, parallel: 2, file: null,
 };
 
@@ -357,7 +357,7 @@ describe('processOneIssue — verification failure', () => {
 		const state = makeState();
 		let fixCalled = false;
 		// retries: verify = 1 means 2 total attempts → fixer is called once
-		const config: OrchestratorConfig = { ...baseConfig, retries: { implement: 0, verify: 1 } };
+		const config: OrchestratorConfig = { ...baseConfig, retries: { implement: 0, verify: 1, requirements: 0 } };
 		const { deps } = makeDeps({
 			runVerify: async () => ({ ok: false, steps: [], failedStep: 'test', error: 'fail' }),
 			fixVerificationFailure: async () => { fixCalled = true; },
@@ -766,7 +766,7 @@ describe('processOneIssue — impl retry fixer callback', () => {
 		const node = makeNode(issue);
 		const state = makeState();
 		let callCount = 0;
-		const config: OrchestratorConfig = { ...baseConfig, retries: { implement: 1, verify: 0 } };
+		const config: OrchestratorConfig = { ...baseConfig, retries: { implement: 1, verify: 0, requirements: 0 } };
 		const { deps } = makeDeps({
 			implementIssue: async () => {
 				callCount++;
@@ -789,7 +789,7 @@ describe('processOneIssue — verify retry fixer callback', () => {
 		const state = makeState();
 		let fixCalled = false;
 		let verifyCount = 0;
-		const config: OrchestratorConfig = { ...baseConfig, retries: { implement: 0, verify: 1 } };
+		const config: OrchestratorConfig = { ...baseConfig, retries: { implement: 0, verify: 1, requirements: 0 } };
 		const { deps } = makeDeps({
 			runVerify: async () => {
 				verifyCount++;
@@ -811,7 +811,7 @@ describe('processOneIssue — verify retry fixer callback', () => {
 		const state = makeState();
 		let fixCalled = false;
 		let verifyCount = 0;
-		const config: OrchestratorConfig = { ...baseConfig, retries: { implement: 0, verify: 1 } };
+		const config: OrchestratorConfig = { ...baseConfig, retries: { implement: 0, verify: 1, requirements: 0 } };
 		const { deps } = makeDeps({
 			runVerify: async () => {
 				verifyCount++;

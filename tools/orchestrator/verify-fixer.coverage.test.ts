@@ -23,7 +23,7 @@ function makeConfig(verifyCmds: string[] = ['bun test']): OrchestratorConfig {
 		baseBranch: 'main',
 		worktreeDir: '.pait/worktrees',
 		models: { implement: 'sonnet', assess: 'haiku' },
-		retries: { implement: 1, verify: 1 },
+		retries: { implement: 1, verify: 1, requirements: 1 },
 		allowedTools: 'Bash Edit Write Read',
 		verify: verifyCmds.map((cmd) => ({ name: cmd, cmd })),
 	};

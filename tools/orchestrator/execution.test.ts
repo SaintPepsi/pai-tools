@@ -51,14 +51,14 @@ const baseConfig: OrchestratorConfig = {
 	baseBranch: 'main',
 	worktreeDir: '.pait/worktrees',
 	models: { implement: 'claude-sonnet', assess: 'claude-haiku' },
-	retries: { implement: 0, verify: 0 },
+	retries: { implement: 0, verify: 0, requirements: 0 },
 	allowedTools: 'Bash Edit Write Read',
 	verify: [{ name: 'test', cmd: 'bun test' }],
 };
 
 const baseFlags: OrchestratorFlags = {
 	dryRun: false, reset: false, statusOnly: false, skipE2e: true,
-	skipSplit: true, noVerify: false, singleMode: false,
+	skipSplit: true, skipRequirements: false, noVerify: false, singleMode: false,
 	singleIssue: null, fromIssue: null, parallel: 1, file: null,
 };
 
@@ -697,7 +697,7 @@ describe('runMainLoop — retry fixer callbacks', () => {
 		let fixerCalled = false;
 		let callCount = 0;
 		// retries.implement = 1 means 2 attempts total; fixer runs between them
-		const config: OrchestratorConfig = { ...baseConfig, retries: { implement: 1, verify: 0 } };
+		const config: OrchestratorConfig = { ...baseConfig, retries: { implement: 1, verify: 0, requirements: 0 } };
 		const { deps } = makeDeps({
 			implementIssue: async () => {
 				callCount++;
@@ -721,7 +721,7 @@ describe('runMainLoop — retry fixer callbacks', () => {
 		let fixVerifyCalled = false;
 		let verifyCallCount = 0;
 		// retries.verify = 1 means 2 attempts total; fixer runs between them
-		const config: OrchestratorConfig = { ...baseConfig, retries: { implement: 0, verify: 1 } };
+		const config: OrchestratorConfig = { ...baseConfig, retries: { implement: 0, verify: 1, requirements: 0 } };
 		const { deps } = makeDeps({
 			runVerify: async () => {
 				verifyCallCount++;
@@ -743,7 +743,7 @@ describe('runMainLoop — retry fixer callbacks', () => {
 		const state = makeState();
 		let fixVerifyCalled = false;
 		let verifyCallCount = 0;
-		const config: OrchestratorConfig = { ...baseConfig, retries: { implement: 0, verify: 1 } };
+		const config: OrchestratorConfig = { ...baseConfig, retries: { implement: 0, verify: 1, requirements: 0 } };
 		const { deps } = makeDeps({
 			// fails but with NO failedStep — fixer should be skipped
 			runVerify: async () => {

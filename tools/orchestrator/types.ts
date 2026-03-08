@@ -43,6 +43,7 @@ export interface OrchestratorConfig {
 	retries: {
 		implement: number;
 		verify: number;
+		requirements: number;
 	};
 	allowedTools: string;
 	verify: VerifyCommand[];
@@ -58,6 +59,7 @@ export interface OrchestratorFlags {
 	skipSplit: boolean;
 	noVerify: boolean;
 	singleMode: boolean;
+	skipRequirements: boolean;
 	singleIssue: number | null;
 	fromIssue: number | null;
 	parallel: number;

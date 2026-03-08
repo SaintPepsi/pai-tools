@@ -1,18 +1,20 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { $ } from 'bun';
-import { mkdtempSync, existsSync, rmSync, mkdirSync } from 'node:fs';
+import { defaultFsAdapter } from '@shared/adapters/fs.ts';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createWorktree, removeWorktree, localBranchExists, deleteLocalBranch } from '@shared/git.ts';
 import { RunLogger } from '@shared/logging.ts';
 import type { OrchestratorConfig } from '@tools/orchestrator/types.ts';
 
+const fs = defaultFsAdapter;
+
 const testConfig: OrchestratorConfig = {
 	branchPrefix: 'feat/',
 	baseBranch: 'main',
 	worktreeDir: '.pait/worktrees',
 	models: { implement: 'sonnet', assess: 'haiku' },
-	retries: { implement: 1, verify: 1 },
+	retries: { implement: 1, verify: 1, requirements: 1 },
 	allowedTools: 'Bash Edit Write Read',
 	verify: []
 };
@@ -23,9 +25,9 @@ describe('worktree management', () => {
 	let logger: RunLogger;
 
 	beforeEach(async () => {
-		tempDir = mkdtempSync(join(tmpdir(), 'pai-wt-test-'));
+		tempDir = fs.mkdtemp(join(tmpdir(), 'pai-wt-test-'));
 		repoRoot = join(tempDir, 'repo');
-		mkdirSync(repoRoot);
+		fs.mkdirp(repoRoot);
 
 		// Initialize a real git repo with an initial commit
 		await $`git -C ${repoRoot} init`.quiet();
@@ -38,7 +40,7 @@ describe('worktree management', () => {
 	afterEach(async () => {
 		// Clean up any worktrees first
 		await $`git -C ${repoRoot} worktree prune`.quiet().catch(() => {});
-		rmSync(tempDir, { recursive: true, force: true });
+		fs.rmrf(tempDir);
 	});
 
 	test('createWorktree creates directory and branch from base', async () => {
@@ -53,7 +55,7 @@ describe('worktree management', () => {
 
 		expect(result.ok).toBe(true);
 		expect(result.baseBranch).toBe('main');
-		expect(existsSync(result.worktreePath)).toBe(true);
+		expect(fs.fileExists(result.worktreePath)).toBe(true);
 
 		// Branch should exist
 		expect(await localBranchExists('feat/1-test-feature', repoRoot)).toBe(true);
@@ -77,7 +79,7 @@ describe('worktree management', () => {
 		);
 
 		expect(result.ok).toBe(true);
-		expect(existsSync(result.worktreePath)).toBe(true);
+		expect(fs.fileExists(result.worktreePath)).toBe(true);
 
 		// Clean up
 		await removeWorktree(result.worktreePath, 'feat/2-stale-branch', repoRoot, logger, 2);
@@ -94,11 +96,11 @@ describe('worktree management', () => {
 		);
 
 		expect(result.ok).toBe(true);
-		expect(existsSync(result.worktreePath)).toBe(true);
+		expect(fs.fileExists(result.worktreePath)).toBe(true);
 
 		await removeWorktree(result.worktreePath, 'feat/3-cleanup-test', repoRoot, logger, 3);
 
-		expect(existsSync(result.worktreePath)).toBe(false);
+		expect(fs.fileExists(result.worktreePath)).toBe(false);
 	});
 
 	test('createWorktree cleans up leftover worktree directory', async () => {
@@ -128,7 +130,7 @@ describe('worktree management', () => {
 			4
 		);
 		expect(result2.ok).toBe(true);
-		expect(existsSync(result2.worktreePath)).toBe(true);
+		expect(fs.fileExists(result2.worktreePath)).toBe(true);
 
 		// Clean up
 		await removeWorktree(result2.worktreePath, 'feat/4-rerun', repoRoot, logger, 4);
